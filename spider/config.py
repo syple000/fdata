@@ -3,6 +3,9 @@ from typing import List
 
 class SpiderConfig:
     """爬虫配置类"""
+
+    # 并发限制
+    MAX_CONCURRENT_REQUESTS = 10
     
     # 反爬虫配置
     USER_AGENTS = [

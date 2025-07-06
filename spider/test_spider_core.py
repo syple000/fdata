@@ -4,16 +4,17 @@ import os
 import json
 import logging
 import time
+import asyncio
 from unittest.mock import patch, MagicMock
 from .spider_core import AntiDetectionSpider
 from .config import SpiderConfig
 from .data_processor import DataProcessor
 import shutil
 
-class TestAntiDetectionSpider(unittest.TestCase):
-    """AntiDetectionSpider 单元测试"""
+class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
+    """AntiDetectionSpider 异步单元测试"""
     
-    def setUp(self):
+    async def asyncSetUp(self):
         """测试前准备"""
         # 创建临时目录
         self.temp_dir = tempfile.mkdtemp()
@@ -35,11 +36,11 @@ class TestAntiDetectionSpider(unittest.TestCase):
         # 配置日志
         logging.basicConfig(level=logging.WARNING)
     
-    def tearDown(self):
+    async def asyncTearDown(self):
         """测试后清理"""
         # 停止爬虫
         try:
-            self.spider.stop()
+            await self.spider.stop()
         except:
             pass
         
@@ -55,7 +56,7 @@ class TestAntiDetectionSpider(unittest.TestCase):
         self.assertIsNone(spider.browser)
         self.assertIsNone(spider.playwright)
         self.assertIsNone(spider.context)
-        self.assertTrue(spider.auto_cookie)
+        self.assertFalse(spider.auto_cookie)  # 默认为False
         self.assertEqual(spider.cookie_file, "cookies.json")
         
         # 测试自定义配置初始化
@@ -69,58 +70,59 @@ class TestAntiDetectionSpider(unittest.TestCase):
         self.assertTrue(spider_custom.auto_cookie)
         self.assertEqual(spider_custom.cookie_file, "test_cookies.json")
     
-    def test_start_and_stop(self):
+    async def test_start_and_stop(self):
         """测试启动和停止爬虫"""
         # 测试启动
-        self.spider.start()
+        await self.spider.start()
         self.assertIsNotNone(self.spider.playwright)
         self.assertIsNotNone(self.spider.browser)
         self.assertIsNotNone(self.spider.context)
         self.assertIsNotNone(self.spider.user_agent)
         
         # 测试停止
-        self.spider.stop()
+        await self.spider.stop()
         self.assertIsNone(self.spider.context)
         self.assertIsNone(self.spider.browser)
         self.assertIsNone(self.spider.playwright)
     
-    def test_start_with_proxy(self):
+    async def test_start_with_proxy(self):
         """测试使用代理启动爬虫"""
-        self.spider.start()
+        await self.spider.start()
         # 使用免费代理进行测试（可能不稳定，仅用于测试代理配置）
         proxy_url = "127.0.0.1:10809"
         
         try:
-            self.spider.switch_context(proxy=proxy_url)
+            await self.spider.switch_context(proxy=proxy_url)
             self.assertIsNotNone(self.spider.context)
-            self.assertIsInstance(self.spider.crawl_url(self.test_url), dict)
-            self.spider.stop()
+            result = await self.spider.crawl_url(self.test_url)
+            self.assertIsInstance(result, dict)
+            await self.spider.stop()
         except Exception as e:
             # 代理可能不可用，这是正常的
             self.assertIn("proxy", str(e).lower())
     
-    def test_switch_context(self):
+    async def test_switch_context(self):
         """测试切换浏览器上下文"""
-        self.spider.start()
+        await self.spider.start()
         
         # 获取原始上下文
         original_context = self.spider.context
         
         # 切换上下文
-        self.spider.switch_context()
+        await self.spider.switch_context()
         
         # 验证上下文已切换
         self.assertIsNotNone(self.spider.context)
         self.assertNotEqual(self.spider.context, original_context)
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_switch_context_without_browser(self):
+    async def test_switch_context_without_browser(self):
         """测试未启动浏览器时切换上下文"""
         with self.assertRaises(Exception):
-            self.spider.switch_context()
+            await self.spider.switch_context()
     
-    def test_cookie_management(self):
+    async def test_cookie_management(self):
         """测试 Cookie 管理"""
         # 创建测试 Cookie 文件
         test_cookies = [
@@ -138,22 +140,22 @@ class TestAntiDetectionSpider(unittest.TestCase):
             json.dump(test_cookies, f)
         
         # 启动爬虫（应该自动加载 cookies）
-        self.spider.start()
+        await self.spider.start()
         
         # 验证 cookies 加载
         self.assertTrue(os.path.exists(self.temp_cookie_file))
         
         # 测试保存 cookies
-        self.spider._save_cookies()
+        await self.spider._save_cookies()
         self.assertTrue(os.path.exists(self.temp_cookie_file))
         
         # 测试清除 cookies
-        self.spider.clear_cookies()
+        await self.spider.clear_cookies()
         self.assertFalse(os.path.exists(self.temp_cookie_file))
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_load_cookies_file_not_exists(self):
+    async def test_load_cookies_file_not_exists(self):
         """测试加载不存在的 Cookie 文件"""
         non_existent_file = os.path.join(self.temp_dir, "non_existent_cookies.json")
         spider = AntiDetectionSpider(
@@ -161,12 +163,12 @@ class TestAntiDetectionSpider(unittest.TestCase):
             cookie_file=non_existent_file
         )
         
-        spider.start()
+        await spider.start()
         # 应该不会抛出异常
         self.assertIsNotNone(spider.context)
-        spider.stop()
+        await spider.stop()
     
-    def test_load_cookies_invalid_json(self):
+    async def test_load_cookies_invalid_json(self):
         """测试加载无效的 Cookie 文件"""
         # 创建无效的 JSON 文件
         with open(self.temp_cookie_file, 'w', encoding='utf-8') as f:
@@ -177,23 +179,23 @@ class TestAntiDetectionSpider(unittest.TestCase):
             cookie_file=self.temp_cookie_file
         )
         
-        spider.start()
+        await spider.start()
         # 应该不会抛出异常，但会记录错误日志
         self.assertIsNotNone(spider.context)
-        spider.stop()
+        await spider.stop()
     
-    def test_create_page_without_context(self):
+    async def test_create_page_without_context(self):
         """测试未启动上下文时创建页面"""
         with self.assertRaises(Exception) as context:
-            self.spider._create_page()
+            await self.spider._create_page()
         self.assertIn("浏览器上下文未启动", str(context.exception))
     
-    def test_crawl_url_success(self):
+    async def test_crawl_url_success(self):
         """测试成功爬取URL"""
-        self.spider.start()
+        await self.spider.start()
         
         # 爬取百度首页
-        result = self.spider.crawl_url(self.test_url)
+        result = await self.spider.crawl_url(self.test_url)
         
         # 验证结果
         self.assertIsInstance(result, dict)
@@ -211,42 +213,42 @@ class TestAntiDetectionSpider(unittest.TestCase):
         # 验证标题包含"百度"
         self.assertIn("百度", result.get("title", ""))
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_with_wait_time(self):
+    async def test_crawl_url_with_wait_time(self):
         """测试带等待时间的爬取"""
-        self.spider.start()
+        await self.spider.start()
         
         start_time = time.time()
-        result = self.spider.crawl_url(self.test_url, wait_time=2000)  # 等待2秒
+        result = await self.spider.crawl_url(self.test_url, wait_time=2000)  # 等待2秒
         end_time = time.time()
         
         # 验证等待时间
         self.assertGreaterEqual(end_time - start_time, 2)
         self.assertTrue(result.get("success", False))
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_with_random_interval(self):
+    async def test_crawl_url_with_random_interval(self):
         """测试带随机间隔的爬取"""
-        self.spider.start()
+        await self.spider.start()
         
         start_time = time.time()
-        result = self.spider.crawl_url(self.test_url, crawl_after_random_interval=True)
+        result = await self.spider.crawl_url(self.test_url, crawl_after_random_interval=True)
         end_time = time.time()
         
         # 验证有延迟
         self.assertGreater(end_time - start_time, 0)
         self.assertTrue(result.get("success", False))
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_with_element_selector(self):
+    async def test_crawl_url_with_element_selector(self):
         """测试等待特定元素的爬取"""
-        self.spider.start()
+        await self.spider.start()
         
         # 等待百度搜索框出现
-        result = self.spider.crawl_url(
+        result = await self.spider.crawl_url(
             self.test_url,
             wait_elem_selector="input[name='wd']",
             wait_time=5000
@@ -254,14 +256,14 @@ class TestAntiDetectionSpider(unittest.TestCase):
         
         self.assertTrue(result.get("success", False))
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_invalid_url(self):
+    async def test_crawl_url_invalid_url(self):
         """测试爬取无效URL"""
-        self.spider.start()
+        await self.spider.start()
         
         invalid_url = "https://invalid-domain-that-does-not-exist.com"
-        result = self.spider.crawl_url(invalid_url, timeout=5000)
+        result = await self.spider.crawl_url(invalid_url, timeout=5000)
         
         # 验证失败结果
         self.assertIsInstance(result, dict)
@@ -270,51 +272,51 @@ class TestAntiDetectionSpider(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("timestamp", result)
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_timeout(self):
+    async def test_crawl_url_timeout(self):
         """测试爬取超时"""
-        self.spider.start()
+        await self.spider.start()
         
         # 使用很短的超时时间
-        result = self.spider.crawl_url(self.test_url, timeout=1)
+        result = await self.spider.crawl_url(self.test_url, timeout=1)
         
         # 可能成功也可能失败（取决于网络速度）
         self.assertIsInstance(result, dict)
         self.assertIn("success", result)
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_crawl_url_without_browser(self):
+    async def test_crawl_url_without_browser(self):
         """测试未启动浏览器时爬取"""
-        result = self.spider.crawl_url(self.test_url)
+        result = await self.spider.crawl_url(self.test_url)
         
         # 应该返回失败结果
         self.assertFalse(result.get("success", True))
         self.assertIn("error", result)
     
-    def test_retry_mechanism(self):
+    async def test_retry_mechanism(self):
         """测试重试机制"""
         # 修改配置以便快速测试重试
         self.spider.config.MAX_RETRIES = 2
-        self.spider.start()
+        await self.spider.start()
         
         # 使用不存在的域名触发重试
         invalid_url = "https://definitely-does-not-exist-domain.com"
-        result = self.spider.crawl_url(invalid_url, timeout=1000)
+        result = await self.spider.crawl_url(invalid_url, timeout=1000)
         
         # 验证重试后失败
         self.assertFalse(result.get("success", True))
         self.assertIn("error", result)
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_data_management(self):
+    async def test_data_management(self):
         """测试数据管理功能"""
-        self.spider.start()
+        await self.spider.start()
         
         # 爬取一些数据
-        result = self.spider.crawl_url(self.test_url)
+        result = await self.spider.crawl_url(self.test_url)
         data_processor: DataProcessor = result.get("data_processor")
         
         # 测试获取摘要
@@ -331,11 +333,11 @@ class TestAntiDetectionSpider(unittest.TestCase):
         # 测试清空数据
         data_processor.clear_data()
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_multiple_crawls(self):
+    async def test_multiple_crawls(self):
         """测试多次爬取"""
-        self.spider.start()
+        await self.spider.start()
         
         urls = [
             "https://www.baidu.com",
@@ -344,7 +346,7 @@ class TestAntiDetectionSpider(unittest.TestCase):
         
         results = []
         for url in urls:
-            result = self.spider.crawl_url(url)
+            result = await self.spider.crawl_url(url)
             results.append(result)
         
         # 验证所有爬取都有结果
@@ -355,54 +357,127 @@ class TestAntiDetectionSpider(unittest.TestCase):
             self.assertIn("success", result)
             self.assertIn("url", result)
         
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_comprehensive_workflow(self):
+    async def test_crawl_urls_concurrent(self):
+        """测试并发爬取多个URL"""
+        await self.spider.start()
+        
+        urls = [
+            "https://www.baidu.com",
+            "https://www.baidu.com/s?wd=python",
+            "https://www.baidu.com/s?wd=async",
+        ]
+        
+        # 并发爬取
+        results = await self.spider.crawl_urls(urls)
+        
+        # 验证结果
+        self.assertEqual(len(results), len(urls))
+        
+        for result in results:
+            self.assertIsInstance(result, dict)
+            self.assertIn("success", result)
+            self.assertIn("url", result)
+        
+        await self.spider.stop()
+    
+    async def test_crawl_urls_with_limit(self):
+        """测试分批并发爬取"""
+        await self.spider.start()
+        
+        urls = [
+            "https://www.baidu.com",
+            "https://www.baidu.com/s?wd=python",
+            "https://www.baidu.com/s?wd=async",
+            "https://www.baidu.com/s?wd=concurrent",
+        ]
+        
+        # 分批爬取
+        results = await self.spider.crawl_urls_with_limit(urls, batch_size=2)
+        
+        # 验证结果
+        self.assertEqual(len(results), len(urls))
+        
+        for result in results:
+            self.assertIsInstance(result, dict)
+            self.assertIn("success", result)
+            self.assertIn("url", result)
+        
+        await self.spider.stop()
+    
+    async def test_comprehensive_workflow(self):
         """测试完整的工作流程"""
         # 启动爬虫
-        self.spider.start()
+        await self.spider.start()
         
         # 爬取页面
-        result = self.spider.crawl_url(self.test_url)
+        result = await self.spider.crawl_url(self.test_url)
         self.assertTrue(result.get("success", False))
         
         # 切换上下文
-        self.spider.switch_context()
+        await self.spider.switch_context()
         
         # 再次爬取
-        result2 = self.spider.crawl_url(self.test_url)
+        result2 = await self.spider.crawl_url(self.test_url)
         self.assertTrue(result2.get("success", False))
         
         # 清除 cookies
-        self.spider.clear_cookies()
+        await self.spider.clear_cookies()
         
         # 停止爬虫
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_error_handling_during_stop(self):
+    async def test_error_handling_during_stop(self):
         """测试停止时的错误处理"""
-        self.spider.start()
+        await self.spider.start()
         
         # 手动关闭浏览器以模拟错误
         if self.spider.browser:
-            self.spider.browser.close()
+            await self.spider.browser.close()
             self.spider.browser = None
         
         # 停止应该不会抛出异常
-        self.spider.stop()
+        await self.spider.stop()
     
-    def test_context_manager_usage(self):
-        """测试上下文管理器用法的模拟"""
-        # 虽然 AntiDetectionSpider 没有实现上下文管理器，
-        # 但我们可以测试手动的启动和停止
+    async def test_context_manager_usage(self):
+        """测试异步上下文管理器用法"""
         spider = AntiDetectionSpider()
         
-        try:
-            spider.start()
-            result = spider.crawl_url(self.test_url)
+        async with spider as spider_instance:
+            result = await spider_instance.crawl_url(self.test_url)
             self.assertTrue(result.get("success", False))
-        finally:
-            spider.stop()
+        
+        # 验证爬虫已自动停止
+        self.assertIsNone(spider.context)
+        self.assertIsNone(spider.browser)
+        self.assertIsNone(spider.playwright)
+    
+    async def test_concurrent_requests_with_semaphore(self):
+        """测试信号量限制并发请求"""
+        await self.spider.start()
+        
+        # 设置较小的并发限制
+        self.spider._semaphore = asyncio.Semaphore(2)
+        
+        urls = [
+            "https://www.baidu.com",
+            "https://www.baidu.com/s?wd=test1",
+            "https://www.baidu.com/s?wd=test2",
+            "https://www.baidu.com/s?wd=test3",
+        ]
+        
+        start_time = time.time()
+        results = await self.spider.crawl_urls(urls)
+        end_time = time.time()
+        
+        # 验证结果
+        self.assertEqual(len(results), len(urls))
+        
+        # 验证至少有一定的执行时间（由于并发限制）
+        self.assertGreater(end_time - start_time, 1)
+        
+        await self.spider.stop()
 
 
 if __name__ == '__main__':
