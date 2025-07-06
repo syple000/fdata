@@ -14,24 +14,33 @@ from ..utils.exec_time_cost import exec_time_cost
 
 class AntiDetectionSpider:
     """反检测爬虫类"""
+
+    def __enter__(self):
+        """支持上下文管理器"""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """支持上下文管理器"""
+        self.stop()
     
-    def __init__(self, config: Optional[SpiderConfig] = None, output_dir: str = "output", filter_func: Optional[Callable[..., bool]] = None, auto_cookie: bool = False, cookie_file: str = "cookies.json"):
+    def __init__(self, config: Optional[SpiderConfig] = None, auto_cookie: bool = False, cookie_file: str = "cookies.json", proxy: str = None):
         self.config = config or SpiderConfig()
-        self.data_processor = DataProcessor(output_dir=output_dir, filter_func=filter_func)
         self.browser: Optional[Browser] = None
         self.playwright = None
         self.auto_cookie = auto_cookie
         self.cookie_file = cookie_file
         self.context = None
+        self.proxy = proxy
     
-    def start(self, proxy: str = None):
+    def start(self):
         """启动爬虫"""
         try:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch(**self.config.BROWSER_CONFIG)
             
             # 创建浏览器上下文
-            self.context = self.browser.new_context(proxy={"server": proxy} if proxy else None)
+            self.context = self.browser.new_context(proxy={"server": self.proxy} if self.proxy else None)
             
             # 自动加载 cookie
             if self.auto_cookie:
@@ -74,7 +83,10 @@ class AntiDetectionSpider:
             if self.context:
                 self.context.close()
 
-            self.context = self.browser.new_context(proxy={"server": proxy} if proxy else None)
+            # 刷新proxy
+            self.proxy = proxy
+
+            self.context = self.browser.new_context(proxy={"server": self.proxy} if self.proxy else None)
 
             # 加载 cookie
             if self.auto_cookie:
@@ -170,7 +182,7 @@ class AntiDetectionSpider:
         
         return page
     
-    def _setup_response_listener(self, page: Page) -> List[ResponseData]:
+    def _setup_response_listener(self, page: Page, data_processor: DataProcessor) -> List[ResponseData]:
         """设置响应监听器"""
         responses = []
         
@@ -194,7 +206,7 @@ class AntiDetectionSpider:
                 )
                 
                 responses.append(response_data)
-                self.data_processor.add_response(response_data)
+                data_processor.add_response(response_data)
                 
                 # 记录日志
                 logging.info(f"响应捕获: {response.status} {response.url}")
@@ -206,9 +218,18 @@ class AntiDetectionSpider:
         return responses
     
     @exec_time_cost
-    def crawl_url(self, url: str, crawl_after_random_interval: bool = False, timeout: int = 30000, wait_elem_selector: str = None, wait_time: int = 0) -> Dict[str, Any]:
+    def crawl_url(self, url: str,
+        crawl_after_random_interval: bool = False, 
+        timeout: int = 30000, 
+        output_dir: str = "output", 
+        filter_func: Optional[Callable[..., bool]] = None,
+        wait_elem_selector: str = None, 
+        wait_time: int = 0) -> Dict[str, Any]:
+
         """爬取单个URL"""
         logging.info(f"开始爬取: {url}")
+
+        data_processor = DataProcessor(output_dir=output_dir, filter_func=filter_func)
         
         retry_count = 0
         max_retries = self.config.MAX_RETRIES
@@ -219,7 +240,7 @@ class AntiDetectionSpider:
                 page = self._create_page()
                 
                 # 设置响应监听
-                responses = self._setup_response_listener(page)
+                responses = self._setup_response_listener(page, data_processor)
                 
                 # 随机延迟
                 if crawl_after_random_interval:
@@ -250,7 +271,8 @@ class AntiDetectionSpider:
                     "responses_count": len(responses),
                     "content_length": len(content),
                     "timestamp": datetime.now().isoformat(),
-                    "success": True
+                    "success": True,
+                    "data_processor": data_processor,
                 }
                 
                 logging.info(f"爬取成功: {url} - 状态码: {result['status']}")
@@ -273,20 +295,3 @@ class AntiDetectionSpider:
         
         return {"url": url, "success": False, "error": "Max retries exceeded"}
     
-    def get_summary(self) -> Dict[str, Any]:
-        """获取爬取摘要"""
-        return self.data_processor.get_response_summary()
-    
-    def save_data(self, format_type: str = "json") -> str:
-        """保存数据"""
-        if format_type.lower() == "json":
-            return self.data_processor.save_to_json()
-        elif format_type.lower() == "csv":
-            return self.data_processor.save_to_csv()
-        else:
-            raise ValueError("支持的格式: json, csv")
-    
-    def clear_data(self):
-        """清空数据"""
-        self.data_processor.clear_data()
-        logging.info("数据已清空")

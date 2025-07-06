@@ -7,9 +7,8 @@ import time
 from unittest.mock import patch, MagicMock
 from .spider_core import AntiDetectionSpider
 from .config import SpiderConfig
+from .data_processor import DataProcessor
 import shutil
-import requests
-import random
 
 class TestAntiDetectionSpider(unittest.TestCase):
     """AntiDetectionSpider 单元测试"""
@@ -26,7 +25,6 @@ class TestAntiDetectionSpider(unittest.TestCase):
         
         # 创建爬虫实例
         self.spider = AntiDetectionSpider(
-            output_dir=self.temp_output_dir,
             auto_cookie=True,
             cookie_file=self.temp_cookie_file
         )
@@ -54,18 +52,16 @@ class TestAntiDetectionSpider(unittest.TestCase):
         # 测试默认初始化
         spider = AntiDetectionSpider()
         self.assertIsNotNone(spider.config)
-        self.assertIsNotNone(spider.data_processor)
         self.assertIsNone(spider.browser)
         self.assertIsNone(spider.playwright)
         self.assertIsNone(spider.context)
-        self.assertFalse(spider.auto_cookie)
+        self.assertTrue(spider.auto_cookie)
         self.assertEqual(spider.cookie_file, "cookies.json")
         
         # 测试自定义配置初始化
         config = SpiderConfig()
         spider_custom = AntiDetectionSpider(
             config=config,
-            output_dir="test_output",
             auto_cookie=True,
             cookie_file="test_cookies.json"
         )
@@ -90,11 +86,12 @@ class TestAntiDetectionSpider(unittest.TestCase):
     
     def test_start_with_proxy(self):
         """测试使用代理启动爬虫"""
+        self.spider.start()
         # 使用免费代理进行测试（可能不稳定，仅用于测试代理配置）
         proxy_url = "127.0.0.1:10809"
         
         try:
-            self.spider.start(proxy=proxy_url)
+            self.spider.switch_context(proxy=proxy_url)
             self.assertIsNotNone(self.spider.context)
             self.assertIsInstance(self.spider.crawl_url(self.test_url), dict)
             self.spider.stop()
@@ -317,25 +314,22 @@ class TestAntiDetectionSpider(unittest.TestCase):
         self.spider.start()
         
         # 爬取一些数据
-        self.spider.crawl_url(self.test_url)
+        result = self.spider.crawl_url(self.test_url)
+        data_processor: DataProcessor = result.get("data_processor")
         
         # 测试获取摘要
-        summary = self.spider.get_summary()
+        summary = data_processor.get_response_summary()
         self.assertIsInstance(summary, dict)
         
         # 测试保存数据
-        json_file = self.spider.save_data("json")
+        json_file = data_processor.save_to_json()
         self.assertTrue(os.path.exists(json_file))
         
-        csv_file = self.spider.save_data("csv")
+        csv_file = data_processor.save_to_csv()
         self.assertTrue(os.path.exists(csv_file))
         
         # 测试清空数据
-        self.spider.clear_data()
-        
-        # 测试无效格式
-        with self.assertRaises(ValueError):
-            self.spider.save_data("invalid_format")
+        data_processor.clear_data()
         
         self.spider.stop()
     
@@ -361,10 +355,6 @@ class TestAntiDetectionSpider(unittest.TestCase):
             self.assertIn("success", result)
             self.assertIn("url", result)
         
-        # 验证摘要包含多个响应
-        summary = self.spider.get_summary()
-        self.assertGreater(summary.get("total", 0), 0)
-        
         self.spider.stop()
     
     def test_comprehensive_workflow(self):
@@ -382,18 +372,6 @@ class TestAntiDetectionSpider(unittest.TestCase):
         # 再次爬取
         result2 = self.spider.crawl_url(self.test_url)
         self.assertTrue(result2.get("success", False))
-        
-        # 获取摘要
-        summary = self.spider.get_summary()
-        self.assertIsInstance(summary, dict)
-        self.assertGreater(summary.get("total", 0), 0)
-        
-        # 保存数据
-        json_file = self.spider.save_data("json")
-        self.assertTrue(os.path.exists(json_file))
-        
-        # 清空数据
-        self.spider.clear_data()
         
         # 清除 cookies
         self.spider.clear_cookies()
@@ -417,7 +395,7 @@ class TestAntiDetectionSpider(unittest.TestCase):
         """测试上下文管理器用法的模拟"""
         # 虽然 AntiDetectionSpider 没有实现上下文管理器，
         # 但我们可以测试手动的启动和停止
-        spider = AntiDetectionSpider(output_dir=self.temp_output_dir)
+        spider = AntiDetectionSpider()
         
         try:
             spider.start()
