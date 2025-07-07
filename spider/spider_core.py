@@ -24,7 +24,7 @@ class AntiDetectionSpider:
         """支持异步上下文管理器"""
         await self.stop()
     
-    def __init__(self, config: Optional[SpiderConfig] = None, auto_cookie: bool = False, cookie_file: str = "cookies.json", proxy: str = None):
+    def __init__(self, config: Optional[SpiderConfig] = None, auto_cookie: bool = False, cookie_file: str = "cookies.json", proxy: str = None, max_concurrent_requests: int = 20):
         self.config = config or SpiderConfig()
         self.browser: Optional[Browser] = None
         self.playwright = None
@@ -32,7 +32,7 @@ class AntiDetectionSpider:
         self.cookie_file = cookie_file
         self.context: Optional[BrowserContext] = None
         self.proxy = proxy
-        self._semaphore = asyncio.Semaphore(self.config.MAX_CONCURRENT_REQUESTS if hasattr(self.config, 'MAX_CONCURRENT_REQUESTS') else 10)
+        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
     
     async def start(self):
         """启动爬虫"""
@@ -130,7 +130,7 @@ class AntiDetectionSpider:
         except Exception as e:
             logging.error(f"清除 cookie 失败: {e}")
   
-    async def _create_page(self) -> Page:
+    async def _create_page(self, headers: Optional[Dict[str, str]] = None) -> Page:
         """创建新页面并配置反检测"""
         if not self.context:
             raise Exception("浏览器上下文未启动")
@@ -150,6 +150,8 @@ class AntiDetectionSpider:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         })
+        if headers:
+            await page.set_extra_http_headers(headers)
         
         # 注入反检测脚本
         await page.add_init_script("""
@@ -226,12 +228,22 @@ class AntiDetectionSpider:
     
     @exec_time_cost
     async def crawl_url(self, url: str,
+        headers: Optional[Dict[str, str]] = None,
         crawl_after_random_interval: bool = False, 
         timeout: int = 30000, 
         output_dir: str = "output", 
         filter_func: Optional[Callable[..., bool]] = None,
-        wait_elem_selector: str = None, 
-        wait_time: int = 0) -> Dict[str, Any]:
+        actions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        '''
+        actions eg: [
+            {"type": "click", "selector": "#login-button"},
+            {"type": "input", "selector": "#username", "value": "my_username"},
+            {"type": "input", "selector": "#password", "value": "my_password"},
+            {"type": "click", "selector": "#submit-button"},
+            {"type": "wait", "selector": "#dashboard", "value": 5000}
+        ]
+        '''
 
         """爬取单个URL"""
         async with self._semaphore:  # 限制并发数
@@ -245,7 +257,7 @@ class AntiDetectionSpider:
             while retry_count < max_retries:
                 try:
                     # 创建新页面
-                    page = await self._create_page()
+                    page = await self._create_page(headers)
                     
                     # 设置响应监听
                     responses = self._setup_response_listener(page, data_processor)
@@ -259,11 +271,21 @@ class AntiDetectionSpider:
                     # 访问页面
                     response = await page.goto(url, timeout=timeout)
                     
-                    # 等待页面加载或指定元素出现
-                    if wait_elem_selector and wait_time > 0:
-                        await page.wait_for_selector(wait_elem_selector, timeout=wait_time)
-                    elif wait_time > 0:
-                        await page.wait_for_timeout(wait_time)
+                    # execute actions if provided
+                    if actions:
+                        for action in actions:
+                            if action['type'] == 'click':
+                                await page.click(action['selector'])
+                            elif action['type'] == 'input':
+                                await page.fill(action['selector'], action['value'])
+                            elif action['type'] == 'wait':
+                                wait_elem_selector = action.get('selector')
+                                wait_time = action.get('value', 0)
+                                await page.wait_for_selector(wait_elem_selector, timeout=wait_time)
+                            else:
+                                logging.warning(f"未知操作类型: {action['type']}")
+
+                            await asyncio.sleep(self.config.ACTION_INTERVAL)  # 每次操作间隔时间
                     
                     # 获取页面信息
                     title = await page.title()
@@ -303,29 +325,4 @@ class AntiDetectionSpider:
                         }
             
             return {"url": url, "success": False, "error": "Max retries exceeded"}
-    
-    async def crawl_urls(self, urls: List[str], **kwargs) -> List[Dict[str, Any]]:
-        """并发爬取多个URL"""
-        tasks = []
-        for url in urls:
-            task = asyncio.create_task(self.crawl_url(url, **kwargs))
-            tasks.append(task)
-        
-        # 等待所有任务完成
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理异常结果
-        processed_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                processed_results.append({
-                    "url": urls[i],
-                    "error": str(result),
-                    "timestamp": datetime.now().isoformat(),
-                    "success": False
-                })
-            else:
-                processed_results.append(result)
-        
-        return processed_results
-  
+ 

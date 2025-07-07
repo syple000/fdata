@@ -4,9 +4,6 @@ from typing import List
 class SpiderConfig:
     """爬虫配置类"""
 
-    # 并发限制
-    MAX_CONCURRENT_REQUESTS = 10
-    
     # 反爬虫配置
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -22,9 +19,9 @@ class SpiderConfig:
     
     # 重试配置
     MAX_RETRIES = 3
-    
-    # 代理配置（可选）
-    PROXIES: List[str] = []
+
+    # action interval
+    ACTION_INTERVAL = 0.5  # 每次操作间隔时间（秒）
     
     # 浏览器配置
     BROWSER_CONFIG = {

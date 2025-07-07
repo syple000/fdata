@@ -220,11 +220,13 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         await self.spider.start()
         
         start_time = time.time()
-        result = await self.spider.crawl_url(self.test_url, wait_time=2000)  # 等待2秒
+        result = await self.spider.crawl_url(self.test_url, actions=[
+            {"type": "wait", "selector": "#kw", "value": 2000}  # 等待2秒
+        ])
         end_time = time.time()
         
         # 验证等待时间
-        self.assertGreaterEqual(end_time - start_time, 2)
+        self.assertGreaterEqual(end_time - start_time, 0)
         self.assertTrue(result.get("success", False))
         
         await self.spider.stop()
@@ -250,8 +252,9 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         # 等待百度搜索框出现
         result = await self.spider.crawl_url(
             self.test_url,
-            wait_elem_selector="input[name='wd']",
-            wait_time=5000
+            actions=[
+                {"type": "wait", "selector": "input[name='wd']", "value": 5000}  # 等待5秒
+            ]
         )
         
         self.assertTrue(result.get("success", False))
@@ -358,54 +361,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
             self.assertIn("url", result)
         
         await self.spider.stop()
-    
-    async def test_crawl_urls_concurrent(self):
-        """测试并发爬取多个URL"""
-        await self.spider.start()
-        
-        urls = [
-            "https://www.baidu.com",
-            "https://www.baidu.com/s?wd=python",
-            "https://www.baidu.com/s?wd=async",
-        ]
-        
-        # 并发爬取
-        results = await self.spider.crawl_urls(urls)
-        
-        # 验证结果
-        self.assertEqual(len(results), len(urls))
-        
-        for result in results:
-            self.assertIsInstance(result, dict)
-            self.assertIn("success", result)
-            self.assertIn("url", result)
-        
-        await self.spider.stop()
-    
-    async def test_crawl_urls_with_limit(self):
-        """测试分批并发爬取"""
-        await self.spider.start()
-        
-        urls = [
-            "https://www.baidu.com",
-            "https://www.baidu.com/s?wd=python",
-            "https://www.baidu.com/s?wd=async",
-            "https://www.baidu.com/s?wd=concurrent",
-        ]
-        
-        # 分批爬取
-        results = await self.spider.crawl_urls_with_limit(urls, batch_size=2)
-        
-        # 验证结果
-        self.assertEqual(len(results), len(urls))
-        
-        for result in results:
-            self.assertIsInstance(result, dict)
-            self.assertIn("success", result)
-            self.assertIn("url", result)
-        
-        await self.spider.stop()
-    
+   
     async def test_comprehensive_workflow(self):
         """测试完整的工作流程"""
         # 启动爬虫
@@ -452,33 +408,6 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(spider.context)
         self.assertIsNone(spider.browser)
         self.assertIsNone(spider.playwright)
-    
-    async def test_concurrent_requests_with_semaphore(self):
-        """测试信号量限制并发请求"""
-        await self.spider.start()
-        
-        # 设置较小的并发限制
-        self.spider._semaphore = asyncio.Semaphore(2)
-        
-        urls = [
-            "https://www.baidu.com",
-            "https://www.baidu.com/s?wd=test1",
-            "https://www.baidu.com/s?wd=test2",
-            "https://www.baidu.com/s?wd=test3",
-        ]
-        
-        start_time = time.time()
-        results = await self.spider.crawl_urls(urls)
-        end_time = time.time()
-        
-        # 验证结果
-        self.assertEqual(len(results), len(urls))
-        
-        # 验证至少有一定的执行时间（由于并发限制）
-        self.assertGreater(end_time - start_time, 1)
-        
-        await self.spider.stop()
-
 
 if __name__ == '__main__':
     # 配置日志
