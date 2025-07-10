@@ -95,7 +95,8 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
             await self.spider.switch_context(proxy=proxy_url)
             self.assertIsNotNone(self.spider.context)
             result = await self.spider.crawl_url(self.test_url)
-            self.assertIsInstance(result, dict)
+            self.assertIsNotNone(result)
+            self.assertTrue(hasattr(result, 'success'))
             await self.spider.stop()
         except Exception as e:
             # 代理可能不可用，这是正常的
@@ -197,21 +198,23 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         # 爬取百度首页
         result = await self.spider.crawl_url(self.test_url)
         
-        # 验证结果
-        self.assertIsInstance(result, dict)
-        self.assertTrue(result.get("success", False))
-        self.assertEqual(result.get("url"), self.test_url)
-        self.assertIn("title", result)
-        self.assertIn("content", result)
-        self.assertIn("status", result)
-        self.assertIn("timestamp", result)
-        self.assertGreater(result.get("content_length", 0), 0)
+        # 验证结果结构
+        self.assertIsNotNone(result)
+        self.assertTrue(hasattr(result, 'success'))
+        self.assertTrue(result.success)
+        self.assertEqual(result.url, self.test_url)
+        self.assertTrue(hasattr(result, 'title'))
+        self.assertTrue(hasattr(result, 'content'))
+        self.assertTrue(hasattr(result, 'status'))
+        self.assertTrue(hasattr(result, 'timestamp'))
+        self.assertTrue(hasattr(result, 'content_length'))
+        self.assertGreater(result.content_length, 0)
         
         # 验证状态码
-        self.assertEqual(result.get("status"), 200)
+        self.assertEqual(result.status, 200)
         
         # 验证标题包含"百度"
-        self.assertIn("百度", result.get("title", ""))
+        self.assertIn("百度", result.title)
         
         await self.spider.stop()
     
@@ -227,7 +230,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         
         # 验证等待时间
         self.assertGreaterEqual(end_time - start_time, 0)
-        self.assertTrue(result.get("success", False))
+        self.assertTrue(result.success)
         
         await self.spider.stop()
     
@@ -241,7 +244,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         
         # 验证有延迟
         self.assertGreater(end_time - start_time, 0)
-        self.assertTrue(result.get("success", False))
+        self.assertTrue(result.success)
         
         await self.spider.stop()
     
@@ -257,7 +260,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
             ]
         )
         
-        self.assertTrue(result.get("success", False))
+        self.assertTrue(result.success)
         
         await self.spider.stop()
     
@@ -269,11 +272,11 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         result = await self.spider.crawl_url(invalid_url, timeout=5000)
         
         # 验证失败结果
-        self.assertIsInstance(result, dict)
-        self.assertFalse(result.get("success", True))
-        self.assertEqual(result.get("url"), invalid_url)
-        self.assertIn("error", result)
-        self.assertIn("timestamp", result)
+        self.assertIsNotNone(result)
+        self.assertFalse(result.success)
+        self.assertEqual(result.url, invalid_url)
+        self.assertTrue(hasattr(result, 'error'))
+        self.assertTrue(hasattr(result, 'timestamp'))
         
         await self.spider.stop()
     
@@ -285,8 +288,8 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         result = await self.spider.crawl_url(self.test_url, timeout=1)
         
         # 可能成功也可能失败（取决于网络速度）
-        self.assertIsInstance(result, dict)
-        self.assertIn("success", result)
+        self.assertIsNotNone(result)
+        self.assertTrue(hasattr(result, 'success'))
         
         await self.spider.stop()
     
@@ -295,8 +298,8 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         result = await self.spider.crawl_url(self.test_url)
         
         # 应该返回失败结果
-        self.assertFalse(result.get("success", True))
-        self.assertIn("error", result)
+        self.assertFalse(result.success)
+        self.assertTrue(hasattr(result, 'error'))
     
     async def test_retry_mechanism(self):
         """测试重试机制"""
@@ -309,8 +312,8 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         result = await self.spider.crawl_url(invalid_url, timeout=1000)
         
         # 验证重试后失败
-        self.assertFalse(result.get("success", True))
-        self.assertIn("error", result)
+        self.assertFalse(result.success)
+        self.assertTrue(hasattr(result, 'error'))
         
         await self.spider.stop()
     
@@ -320,7 +323,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         
         # 爬取一些数据
         result = await self.spider.crawl_url(self.test_url)
-        data_processor: DataProcessor = result.get("data_processor")
+        data_processor = result.data_processor
         
         # 测试获取摘要
         summary = data_processor.get_response_summary()
@@ -356,9 +359,9 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), len(urls))
         
         for result in results:
-            self.assertIsInstance(result, dict)
-            self.assertIn("success", result)
-            self.assertIn("url", result)
+            self.assertIsNotNone(result)
+            self.assertTrue(hasattr(result, 'success'))
+            self.assertTrue(hasattr(result, 'url'))
         
         await self.spider.stop()
    
@@ -369,14 +372,14 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         
         # 爬取页面
         result = await self.spider.crawl_url(self.test_url)
-        self.assertTrue(result.get("success", False))
+        self.assertTrue(result.success)
         
         # 切换上下文
         await self.spider.switch_context()
         
         # 再次爬取
         result2 = await self.spider.crawl_url(self.test_url)
-        self.assertTrue(result2.get("success", False))
+        self.assertTrue(result2.success)
         
         # 清除 cookies
         await self.spider.clear_cookies()
@@ -402,7 +405,7 @@ class TestAntiDetectionSpider(unittest.IsolatedAsyncioTestCase):
         
         async with spider as spider_instance:
             result = await spider_instance.crawl_url(self.test_url)
-            self.assertTrue(result.get("success", False))
+            self.assertTrue(result.success)
         
         # 验证爬虫已自动停止
         self.assertIsNone(spider.context)

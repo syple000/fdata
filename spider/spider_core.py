@@ -3,6 +3,7 @@ import random
 import asyncio
 from typing import Optional, Dict, Any, List, Callable
 from playwright.async_api import async_playwright, Page, Browser, Response, BrowserContext
+from playwright_stealth import Stealth
 from datetime import datetime
 import logging
 import os
@@ -11,6 +12,23 @@ import json
 from .config import SpiderConfig
 from .data_processor import DataProcessor, ResponseData
 from ..utils.exec_time_cost import exec_time_cost
+from ..utils.bytes_str_convert import from_bytes_to_str, from_str_to_bytes
+from dataclasses import dataclass
+
+@dataclass
+class CrawlResult:
+    """爬取结果数据结构"""
+    url: str
+    success: bool
+    timestamp: str
+    title: Optional[str] = None
+    content: Optional[str] = None
+    status: Optional[int] = None
+    responses_count: int = 0
+    content_length: int = 0
+    error: Optional[str] = None
+    data_processor: Optional[DataProcessor] = None
+
 
 
 class AntiDetectionSpider:
@@ -37,11 +55,14 @@ class AntiDetectionSpider:
     async def start(self):
         """启动爬虫"""
         try:
+            stealth = Stealth()
+
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(**self.config.BROWSER_CONFIG)
             
             # 创建浏览器上下文
             self.context = await self.browser.new_context(proxy={"server": self.proxy} if self.proxy else None)
+            await stealth.apply_stealth_async(self.context)  # 启用反检测脚本
             
             # 自动加载 cookie
             if self.auto_cookie:
@@ -87,7 +108,9 @@ class AntiDetectionSpider:
             # 刷新proxy
             self.proxy = proxy
 
+            stealth = Stealth()
             self.context = await self.browser.new_context(proxy={"server": self.proxy} if self.proxy else None)
+            await stealth.apply_stealth_async(self.context)  # 启用反检测脚本
 
             # 加载 cookie
             if self.auto_cookie:
@@ -211,7 +234,7 @@ class AntiDetectionSpider:
                     timestamp=datetime.now().isoformat(),
                     size=len(body) if body else 0,
                     response_time=time.time() - start_time,
-                    body=body.hex() if body else "",
+                    body=from_bytes_to_str(body),
                 )
                 
                 responses.append(response_data)
@@ -232,9 +255,9 @@ class AntiDetectionSpider:
         crawl_after_random_interval: bool = False, 
         timeout: int = 30000, 
         output_dir: str = "output", 
-        filter_func: Optional[Callable[..., bool]] = None,
+        filter_func: Optional[Callable[[ResponseData], bool]] = None,
         actions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+    ) -> CrawlResult:
         '''
         actions eg: [
             {"type": "click", "selector": "#login-button"},
@@ -294,19 +317,19 @@ class AntiDetectionSpider:
                     # 关闭页面
                     await page.close()
                     
-                    result = {
-                        "url": url,
-                        "title": title,
-                        "content": content,
-                        "status": response.status if response else 0,
-                        "responses_count": len(responses),
-                        "content_length": len(content),
-                        "timestamp": datetime.now().isoformat(),
-                        "success": True,
-                        "data_processor": data_processor,
-                    }
+                    result = CrawlResult(
+                        url=url,
+                        success=True,
+                        timestamp=datetime.now().isoformat(),
+                        title=title,
+                        content=content,
+                        status=response.status if response else 0,
+                        responses_count=len(responses),
+                        content_length=len(content),
+                        data_processor=data_processor
+                    )
                     
-                    logging.info(f"爬取成功: {url} - 状态码: {result['status']}")
+                    logging.info(f"爬取成功: {url} - 状态码: {result.status}")
                     return result
                     
                 except Exception as e:
@@ -317,12 +340,16 @@ class AntiDetectionSpider:
                         # 重试前等待
                         await asyncio.sleep(random.uniform(2, 5))
                     else:
-                        return {
-                            "url": url,
-                            "error": str(e),
-                            "timestamp": datetime.now().isoformat(),
-                            "success": False
-                        }
+                        return CrawlResult(
+                            url=url,
+                            success=False,
+                            timestamp=datetime.now().isoformat(),
+                            error=str(e)
+                        )
             
-            return {"url": url, "success": False, "error": "Max retries exceeded"}
- 
+            return CrawlResult(
+                url=url,
+                success=False,
+                timestamp=datetime.now().isoformat(),
+                error="Max retries exceeded"
+            )

@@ -1,3 +1,5 @@
 playwright==1.53.0
 # 安装后执行：playwright install配置环境
+playwright_stealth==2.0.0
+# mock playwright fingerprint
 requests==2.32.4

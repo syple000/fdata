@@ -18,7 +18,7 @@ class SpiderConfig:
     MAX_DELAY = 3
     
     # 重试配置
-    MAX_RETRIES = 3
+    MAX_RETRIES = 1
 
     # action interval
     ACTION_INTERVAL = 0.5  # 每次操作间隔时间（秒）
