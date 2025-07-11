@@ -1,7 +1,6 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from urllib.parse import urlencode
@@ -28,7 +27,7 @@ class RealTimeQuote:
     high_price: float # 最高价
     low_price: float  # 最低价
     prev_close: float # 昨收价
-    timestamp: datetime # 数据时间戳
+    timestamp: str # 数据时间 2023-10-01 09:30:00
 
 
 @dataclass
@@ -164,7 +163,7 @@ class MarketDataFetcher:
                 high_price=float(fields[4]),       # 最高价
                 low_price=float(fields[5]),        # 最低价
                 prev_close=float(fields[2]),       # 昨收价
-                timestamp=datetime.strptime(f"{fields[30]} {fields[31]}", "%Y-%m-%d %H:%M:%S")  # 行情时间
+                timestamp=f"{fields[30]} {fields[31]}"  # 行情时间
             )
             quotes.append(quote)
         
@@ -172,7 +171,7 @@ class MarketDataFetcher:
         return quotes
 
     @retry(max_retries=3, delay=1)
-    def fetch_historical_data(self, symbol: str, start_date: str, end_date: str) -> List[HistoricalData]:
+    async def fetch_historical_data(self, symbol: str, start_date: str, end_date: str, klt: str='101', fqt: str='0') -> List[HistoricalData]:
         """
         从东方财富获取历史行情数据
         
@@ -184,8 +183,7 @@ class MarketDataFetcher:
         Returns:
             历史行情数据列表
         """
-        self.rate_limiter.acquire()
-        
+
         # 转换股票代码格式
         if symbol.startswith('6'):
             secid = f'1.{symbol}'  # 沪市
@@ -195,14 +193,14 @@ class MarketDataFetcher:
         # 东方财富历史数据API
         # 参数说明：
         # secid: 证券ID，格式为市场代码.股票代码
-        # klt: K线类型，101=日K线
+        # klt: K线类型，101=日K线，102=周K线，103=月K线，5=5分钟，15=15分钟，30=30分钟，60=60分钟
         # fqt: 复权类型，1=前复权，2=后复权，0=不复权
         # beg: 开始日期
         # end: 结束日期
         params = {
             'secid': secid,
-            'klt': '101',  # 日K线
-            'fqt': '1',    # 前复权
+            'klt': klt,  # 日K线
+            'fqt': fqt,    # 前复权
             'beg': start_date.replace('-', ''),
             'end': end_date.replace('-', ''),
             'fields1': 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13',
@@ -210,13 +208,15 @@ class MarketDataFetcher:
         }
         
         url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{urlencode(params)}"
+        logging.info(f"Fetching historical data for {symbol} from {start_date} to {end_date}, URL: {url}")
         
-        response = self.spider_core.get(url, headers=self.eastmoney_headers)
+        async with self.rate_limiter_mgr.get_rate_limiter('push2his.eastmoney.com'):
+            response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
         
-        if not response or response.status_code != 200:
-            raise Exception(f"Failed to fetch historical data for {symbol}: {response.status_code if response else 'No response'}")
+        if not response or not response.success or not response.data_processor.responses:
+            raise Exception(f"Failed to fetch historical data for {symbol}: {response.status if response else 'No response'}")
         
-        data = response.json()
+        data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
         
         if data['rc'] != 0 or not data.get('data', {}).get('klines'):
             raise Exception(f"No historical data found for {symbol}")
@@ -238,10 +238,11 @@ class MarketDataFetcher:
                 change_percent=float(fields[8])
             ))
         
+        logging.info(f"Fetched {len(historical_data)} historical data records for {symbol} from {start_date} to {end_date}, klines: {', '.join([f'{hd.date}: {hd.close_price} ({hd.change_percent:.2f}%)' for hd in historical_data])}")
         return historical_data
 
     @retry(max_retries=3, delay=1)
-    def fetch_stock_list(self, market: str = 'all') -> List[StockInfo]:
+    async def fetch_stock_list(self, market: str = 'all') -> List[StockInfo]:
         """
         从东方财富获取股票列表
         
@@ -251,59 +252,81 @@ class MarketDataFetcher:
         Returns:
             股票信息列表
         """
-        self.rate_limiter.acquire()
-        
         # 东方财富股票列表API
         # 参数说明：
-        # pz: 每页数量
+        # pz: 每页数量（最多100条）
         # pn: 页码
         # po: 排序方式
         # fields: 返回字段
-        params = {
-            'pz': '5000',  # 每页5000条
-            'pn': '1',     # 第1页
-            'po': '1',     # 按代码排序
-            'fields': 'f1,f2,f3,f4,f12,f13,f14',  # 返回字段：涨跌幅,最新价,涨跌额,成交量,代码,名称,行业
-        }
         
-        if market == 'sh':
-            params['fs'] = 'm:1'  # 沪市
-        elif market == 'sz':
-            params['fs'] = 'm:0'  # 深市
-        else:
-            params['fs'] = 'm:0+m:1'  # 全部
+        all_stocks = []
+        page = 1
         
-        url = f"https://push2.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
-        
-        response = self.spider_core.get(url, headers=self.eastmoney_headers)
-        
-        if not response or response.status_code != 200:
-            raise Exception(f"Failed to fetch stock list: {response.status_code if response else 'No response'}")
-        
-        data = response.json()
-        
-        if data['rc'] != 0 or not data.get('data', {}).get('diff'):
-            raise Exception("No stock list data found")
-        
-        stocks = []
-        for item in data['data']['diff']:
-            symbol = item['f12']
-            market_code = 'SH' if symbol.startswith('6') else 'SZ'
+        while True:
+            params = {
+                'pz': '100',  # 每页100条（最大值）
+                'pn': str(page),
+                'po': '1',     # 按代码排序
+                'fields': 'f1,f2,f3,f4,f12,f13,f14',  # 返回字段：涨跌幅,最新价,涨跌额,成交量,代码,名称,行业
+            }
             
-            stocks.append(StockInfo(
-                symbol=symbol,
-                name=item['f14'],
-                market=market_code,
-                industry=item.get('f13', ''),
-                list_date=''  # 此API不返回上市日期
-            ))
+            if market == 'sh':
+                params['fs'] = 'm:1'  # 沪市
+            elif market == 'sz':
+                params['fs'] = 'm:0'  # 深市
+            else:
+                params['fs'] = 'm:0+m:1'  # 全部
+            
+            url = f"https://push2.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
+            
+            async with self.rate_limiter_mgr.get_rate_limiter('push2.eastmoney.com'):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
+            
+            if not response or not response.success or not response.data_processor.responses:
+                raise Exception(f"Failed to fetch stock list: {response.status if response else 'No response'}")
+            
+            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
+            
+            if data['rc'] != 0 or not data.get('data', {}).get('diff'):
+                break
+            
+            page_stocks = []
+            for _, item in data['data']['diff'].items():
+                symbol = item['f12']
+            
+                # 过滤掉转债：转债代码通常以12或11开头，且为6位数字
+                if (symbol.startswith('12') or symbol.startswith('11')) and len(symbol) == 6:
+                    continue
+                
+                # 过滤掉其他非股票代码（如指数、基金等）
+                if not (symbol.startswith('0') or symbol.startswith('3') or symbol.startswith('6')):
+                    continue
+                
+                market_code = 'SH' if symbol.startswith('6') else 'SZ'
+
+                page_stocks.append(StockInfo(
+                    symbol=symbol,
+                    name=item['f14'],
+                    market=market_code,
+                    industry=item.get('f13', ''),
+                    list_date=''  # 此API不返回上市日期
+                ))
+
+            all_stocks.extend(page_stocks)
+            
+            # 如果当前页数据少于100条，说明已经是最后一页
+            if len(data['data']['diff']) < 100:
+                break
+            
+            page += 1
         
-        return stocks
+        logging.info(f"Fetched {len(all_stocks)} stocks for market: {market}")
+        return all_stocks
 
     @retry(max_retries=3, delay=1)
-    def fetch_financial_data(self, symbol: str, report_type: str = 'annual') -> List[FinancialData]:
+    async def fetch_financial_data(self, symbol: str, report_type: str = 'annual') -> List[FinancialData]:
         """
-        从东方财富获取财务数据
+        从东方财富获取财务数据，参考 akshare 实现
         
         Args:
             symbol: 股票代码
@@ -312,54 +335,65 @@ class MarketDataFetcher:
         Returns:
             财务数据列表
         """
-        self.rate_limiter.acquire()
-        
-        # 转换股票代码格式
-        if symbol.startswith('6'):
-            secid = f'1.{symbol}'
-        else:
-            secid = f'0.{symbol}'
-        
         # 东方财富财务数据API
         # 参数说明：
-        # type: 报表类型，4=利润表
-        # rpttype: 报告期类型，4=年报，1=季报
-        params = {
-            'type': '4',  # 利润表
-            'rpttype': '4' if report_type == 'annual' else '1',
-            'secid': secid,
-            'companytype': '4',
-        }
-        
-        url = f"https://emh5.eastmoney.com/api/CaiWuFenXi/GetCaiWuFenXi?{urlencode(params)}"
-        
-        response = self.spider_core.get(url, headers=self.eastmoney_headers)
-        
-        if not response or response.status_code != 200:
-            raise Exception(f"Failed to fetch financial data for {symbol}: {response.status_code if response else 'No response'}")
-        
-        data = response.json()
-        
-        if not data.get('Result'):
-            raise Exception(f"No financial data found for {symbol}")
-        
+        # reportName: 数据表名，RPT_LICO_FN_CPD=利润表
+        # filter: 过滤条件，指定股票代码
+        # sortColumns: 排序字段
+        # sortTypes: 排序方式，-1=降序，1=升序
+        # pageSize: 每页数量
+        # pageNumber: 页码
+        # columns: 返回字段
         financial_data = []
-        for item in data['Result']:
-            financial_data.append(FinancialData(
-                symbol=symbol,
-                report_date=item.get('REPORTDATE', ''),
-                revenue=float(item.get('TOTALOPERATEREVE', 0)),
-                net_profit=float(item.get('NETPROFIT', 0)),
-                eps=float(item.get('BASICEPS', 0)),
-                roe=float(item.get('ROEJQ', 0)),
-                total_assets=float(item.get('TOTALASSETS', 0)),
-                total_liabilities=float(item.get('TOTALLIAB', 0))
-            ))
-        
+        page_number = 1
+        page_size = 50  # 每页数量
+
+        while True:
+            params = {
+                'reportName': 'RPT_LICO_FN_CPD',  # 利润表
+                'filter': f'(SECURITY_CODE="{symbol}")',
+                'sortColumns': 'REPORTDATE',
+                'sortTypes': '-1',
+                'pageSize': str(page_size),
+                'pageNumber': str(page_number),
+                'columns': 'ALL',
+            }
+            
+            url = f"https://datacenter-web.eastmoney.com/api/data/v1/get?{urlencode(params)}"
+            async with self.rate_limiter_mgr.get_rate_limiter('datacenter-web.eastmoney.com'):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
+            
+            if not response or not response.success or not response.data_processor.responses:
+                raise Exception(f"Failed to fetch financial data for {symbol}: {response.status if response else 'No response'}")
+            
+            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
+            if not data.get('result') or not data['result'].get('data'):
+                break  # 没有更多数据
+            
+            page_data = data['result']['data']
+            for item in page_data:
+                financial_data.append(FinancialData(
+                    symbol=symbol,
+                    report_date=item.get('REPORTDATE', ''),
+                    revenue=float(item.get('TOTAL_OPERATE_INCOME', 0)) if 'TOTAL_OPERATE_INCOME' in item and item['TOTAL_OPERATE_INCOME'] else 0,
+                    net_profit=float(item.get('PARENT_NETPROFIT', 0)) if 'PARENT_NETPROFIT' in item and item['PARENT_NETPROFIT'] else 0,
+                    eps=float(item.get('BASIC_EPS', 0)) if 'BASIC_EPS' in item and item['BASIC_EPS'] else 0,
+                    roe=float(item.get('WEIGHTAVG_ROE', 0)) if 'WEIGHTAVG_ROE' in item and item['WEIGHTAVG_ROE'] else 0,
+                    total_assets=float(item.get('TOTAL_ASSETS', 0)) if 'TOTAL_ASSETS' in item and item['TOTAL_ASSETS'] else 0,
+                    total_liabilities=float(item.get('TOTAL_LIABILITIES', 0)) if 'TOTAL_LIABILITIES' in item and item['TOTAL_LIABILITIES'] else 0,
+                ))
+            
+            # 如果当前页数据少于page_size，说明已经是最后一页
+            if len(page_data) < page_size:
+                break
+            
+            page_number += 1  # 查询下一页
+
+        logging.info(f"Fetched a total of {len(financial_data)} financial data records for {symbol}")
         return financial_data
 
     @retry(max_retries=3, delay=1)
-    def fetch_dividend_data(self, symbol: str) -> List[DividendData]:
+    async def fetch_dividend_data(self, symbol: str) -> List[DividendData]:
         """
         从东方财富获取除权除息数据
         
@@ -369,44 +403,58 @@ class MarketDataFetcher:
         Returns:
             除权除息数据列表
         """
-        self.rate_limiter.acquire()
         
-        # 转换股票代码格式
-        if symbol.startswith('6'):
-            secid = f'1.{symbol}'
-        else:
-            secid = f'0.{symbol}'
-        
-        # 东方财富除权除息API
-        # 参数说明：
-        # secid: 证券ID
-        params = {
-            'secid': secid,
-        }
-        
-        url = f"https://emh5.eastmoney.com/api/FenHong/GetFenHongSong?{urlencode(params)}"
-        
-        response = self.spider_core.get(url, headers=self.eastmoney_headers)
-        
-        if not response or response.status_code != 200:
-            raise Exception(f"Failed to fetch dividend data for {symbol}: {response.status_code if response else 'No response'}")
-        
-        data = response.json()
-        
-        if not data.get('Result'):
-            raise Exception(f"No dividend data found for {symbol}")
-        
+        # 东方财富除权除息数据API
         dividend_data = []
-        for item in data['Result']:
-            dividend_data.append(DividendData(
-                symbol=symbol,
-                ex_date=item.get('CQCXR', ''),
-                dividend_per_share=float(item.get('FHPS', 0)),
-                bonus_share_ratio=float(item.get('SGBL', 0)),
-                rights_issue_ratio=float(item.get('PGBL', 0)),
-                rights_issue_price=float(item.get('PGJ', 0))
-            ))
+        page_number = 1
+        page_size = 50  # 每页数量
+
+        while True:
+            params = {
+                'reportName': 'RPT_SHAREBONUS_DET',
+                'columns': 'ALL',  # 返回所有字段
+                'quoteColumns': '',
+                'pageNumber': str(page_number),  # 页码
+                'pageSize': str(page_size),     # 每页数量
+                'sortColumns': 'PLAN_NOTICE_DATE',  # 排序字段
+                'sortTypes': '1',   # 升序排序
+                'source': 'WEB',
+                'client': 'WEB',
+                'filter': f'(SECURITY_CODE="{symbol}")'  # 过滤条件，指定股票代码
+            }
+            
+            url = f"https://datacenter-web.eastmoney.com/api/data/v1/get?{urlencode(params)}"
+
+            logging.info(f"Fetching dividend data for {symbol}, page {page_number}, URL: {url}")
+            
+            async with self.rate_limiter_mgr.get_rate_limiter('datacenter-web.eastmoney.com'):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
+            
+            if not response or not response.success or not response.data_processor.responses:
+                raise Exception(f"Failed to fetch dividend data for {symbol}: {response.status if response else 'No response'}")
+            
+            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
+            
+            if not data.get('result') or not data['result'].get('data'):
+                break  # 没有更多数据
+            
+            for item in data['result']['data']:
+                dividend_data.append(DividendData(
+                    symbol=symbol,
+                    ex_date=item.get('EX_DIVIDEND_DATE', ''),
+                    dividend_per_share=float(item.get('CASH_DIVIDEND_RATIO', 0)) / 10,  # 转换为每股分红
+                    bonus_share_ratio=float(item.get('BONUS_SHARE_RATIO', 0)) / 10,     # 转换为每10股送股数
+                    rights_issue_ratio=float(item.get('ALLOTMENT_RATIO', 0)) / 10,      # 转换为每10股配股数
+                    rights_issue_price=float(item.get('ALLOTMENT_PRICE', 0))
+                ))
+            
+            # 如果当前页数据少于page_size，说明已经是最后一页
+            if len(data['result']['data']) < page_size:
+                break
+            
+            page_number += 1  # 查询下一页
         
+        logging.info(f"Fetched {len(dividend_data)} dividend data records for {symbol}")
         return dividend_data
 
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
@@ -420,6 +468,7 @@ if __name__ == '__main__':
     async def main():
         rate_limiter_mgr = RateLimiterManager()
         rate_limiter_mgr.add_rate_limiter('hq.sinajs.cn', RateLimiter(max_concurrent=5, max_requests_per_minute=60))
+        rate_limiter_mgr.add_rate_limiter('*.eastmoney.com', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=15))
         
         async with AntiDetectionSpider() as spider:
             fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
@@ -434,6 +483,10 @@ if __name__ == '__main__':
             tasks = [
                 async_call_loop(fetcher.fetch_realtime_quotes, ['000001'], interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
                 async_call_loop(fetcher.fetch_realtime_quotes, ['000002'], interval=1.0, check_func=create_timer_check_func(60), ignore_exceptions=True),  # 运行60秒
+                fetcher.fetch_stock_list('all'),
+                fetcher.fetch_historical_data('000001', '2023-01-01', '2023-12-31', klt='101', fqt='0'),
+                fetcher.fetch_dividend_data('000001'),
+                fetcher.fetch_financial_data('000001', report_type='annual'),
             ]
             await asyncio.gather(*tasks)
     

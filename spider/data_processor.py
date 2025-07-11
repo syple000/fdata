@@ -81,26 +81,6 @@ class DataProcessor:
         
         return filepath
     
-    def save_to_csv(self, filename: Optional[str] = None) -> str:
-        """保存为CSV文件"""
-        if not filename:
-            filename = f"spider_data_{self.session_id}.csv"
-        
-        filepath = os.path.join(self.output_dir, filename)
-        
-        if not self.responses:
-            return filepath
-        
-        fieldnames = list(self.responses[0].to_dict().keys())
-        
-        with open(filepath, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for resp in self.responses:
-                writer.writerow(resp.to_dict())
-        
-        return filepath
-    
     def clear_data(self):
         """清空数据"""
         self.responses.clear()
