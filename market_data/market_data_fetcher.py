@@ -4,14 +4,16 @@ import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from urllib.parse import urlencode
-import requests
 import logging
-import random
+import os
+from contextlib import ExitStack, AsyncExitStack
 from ..spider.rate_limiter import RateLimiter, RateLimiterManager
 from ..spider.spider_core import AntiDetectionSpider
-from ..utils.retry import retry
+from ..utils.retry import async_retry
 from ..utils.bytes_str_convert import from_bytes_to_str, from_str_to_bytes
 from ..utils.call_loop import async_call_loop
+from ..utils.parse_html_elem import extract_content
+from ..dao.csv_dao import CSVGenericDAO
 
 @dataclass
 class RealTimeQuote:
@@ -50,21 +52,38 @@ class StockInfo:
     symbol: str
     name: str
     market: str  # 市场类型：SH/SZ
-    industry: str
-    list_date: str
 
 
 @dataclass
 class FinancialData:
-    """财务数据结构"""
+    """财务数据结构，包含利润表、资产负债表和现金流量表的重要字段"""
     symbol: str
     report_date: str
-    revenue: float  # 营业收入
-    net_profit: float  # 净利润
-    eps: float  # 每股收益
-    roe: float  # 净资产收益率
-    total_assets: float  # 总资产
-    total_liabilities: float  # 总负债
+
+    # 利润表
+    total_revenue: float             # 营业收入（TOTAL_OPERATE_INCOME）
+    operating_cost: float            # 营业成本（OPERATE_COST）
+    gross_profit: float              # 毛利润（GROSS_PROFIT）
+    operating_profit: float          # 营业利润（OPERATE_PROFIT）
+    profit_before_tax: float         # 利润总额（TOTAL_PROFIT）
+    net_profit: float                # 归属母公司所有者的净利润（PARENT_NETPROFIT）
+    eps: float                        # 每股收益（BASIC_EPS）
+    roe: float                        # 净资产收益率（WEIGHTAVG_ROE）
+
+    # 资产负债表
+    total_assets: float              # 资产总计（TOTAL_ASSETS）
+    current_assets: float            # 流动资产合计（CURRENT_ASSETS）
+    non_current_assets: float        # 非流动资产合计（NON_CURRENT_ASSETS）
+    total_liabilities: float         # 负债合计（TOTAL_LIABILITIES）
+    current_liabilities: float       # 流动负债合计（CURRENT_LIABILITIES）
+    non_current_liabilities: float   # 非流动负债合计（NON_CURRENT_LIABILITIES）
+    total_equity: float              # 股东权益合计（TOTAL_EQUITY）
+
+    # 现金流量表
+    net_operate_cashflow: float      # 经营活动产生的现金流量净额（NET_CASH_OPER_ACT）
+    net_invest_cashflow: float       # 投资活动产生的现金流量净额（NET_CASH_INVEST_ACT）
+    net_finance_cashflow: float      # 筹资活动产生的现金流量净额（NET_CASH_FINA_ACT）
+    free_cashflow: float             # 自由现金流（FREE_CASH_FLOW）
 
 
 @dataclass
@@ -101,8 +120,8 @@ class MarketDataFetcher:
             "Referer": "http://quote.eastmoney.com/",
         }
 
-    @retry(max_retries=3, delay=1)
-    async def fetch_realtime_quotes(self, symbols: List[str]) -> List[RealTimeQuote]:
+    @async_retry(max_retries=3, delay=1)
+    async def fetch_realtime_quotes(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
         """
         从新浪财经获取实时行情
         
@@ -126,13 +145,13 @@ class MarketDataFetcher:
         url = f"https://hq.sinajs.cn/list={','.join(sina_symbols)}"
 
         async with self.rate_limiter_mgr.get_rate_limiter('hq.sinajs.cn'):
-            response = await self.spider.crawl_url(url, headers=self.sina_headers, filter_func=lambda x: x.url == url)
+            response = await self.spider.crawl_url(url, headers=self.sina_headers)
         
-        if not response or not response.success or not response.data_processor.responses:
-            raise Exception(f"Failed to fetch realtime quotes: {response.status if response else 'No response'}")
+        if not response or not response.success:
+            raise Exception(f"Failed to fetch realtime quotes: {response.error if response else 'No response'}")
         
         quotes = []
-        lines = from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8').split('\n')
+        lines = extract_content(response.content, "html > body > pre").split('\n')
 
         for i, line in enumerate(lines):
             if i >= len(symbols):
@@ -168,10 +187,12 @@ class MarketDataFetcher:
             quotes.append(quote)
         
         logging.info(f"Fetched {len(quotes)} realtime quotes for symbols: {', '.join(symbols)}, detail info: {', '.join([f'{q.symbol}: {q.price} ({q.change_percent:.2f}%)' for q in quotes])}")
+
+        csv_dao.write_records(quotes)
         return quotes
 
-    @retry(max_retries=3, delay=1)
-    async def fetch_historical_data(self, symbol: str, start_date: str, end_date: str, klt: str='101', fqt: str='0') -> List[HistoricalData]:
+    @async_retry(max_retries=3, delay=1)
+    async def fetch_historical_data(self, symbol: str, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: str='101', fqt: str='0') -> List[HistoricalData]:
         """
         从东方财富获取历史行情数据
         
@@ -211,13 +232,13 @@ class MarketDataFetcher:
         logging.info(f"Fetching historical data for {symbol} from {start_date} to {end_date}, URL: {url}")
         
         async with self.rate_limiter_mgr.get_rate_limiter('push2his.eastmoney.com'):
-            response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
+            response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
         
-        if not response or not response.success or not response.data_processor.responses:
-            raise Exception(f"Failed to fetch historical data for {symbol}: {response.status if response else 'No response'}")
-        
-        data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
-        
+        if not response or not response.success:
+            raise Exception(f"Failed to fetch historical data for {symbol}: {response.error if response else 'No response'}")
+
+        data = json.loads(extract_content(response.content, "html > body > pre"))
+
         if data['rc'] != 0 or not data.get('data', {}).get('klines'):
             raise Exception(f"No historical data found for {symbol}")
         
@@ -239,12 +260,14 @@ class MarketDataFetcher:
             ))
         
         logging.info(f"Fetched {len(historical_data)} historical data records for {symbol} from {start_date} to {end_date}, klines: {', '.join([f'{hd.date}: {hd.close_price} ({hd.change_percent:.2f}%)' for hd in historical_data])}")
+
+        csv_dao.write_records(historical_data)
         return historical_data
 
-    @retry(max_retries=3, delay=1)
-    async def fetch_stock_list(self, market: str = 'all') -> List[StockInfo]:
+    @async_retry(max_retries=3, delay=1)
+    async def fetch_stock_list(self, csv_dao: CSVGenericDAO[StockInfo], market: str = 'all') -> List[StockInfo]:
         """
-        从东方财富获取股票列表
+        从东方财富新版 push2delay 接口获取股票列表
         
         Args:
             market: 市场类型，'sh'=沪市，'sz'=深市，'all'=全部
@@ -252,148 +275,181 @@ class MarketDataFetcher:
         Returns:
             股票信息列表
         """
-        # 东方财富股票列表API
-        # 参数说明：
-        # pz: 每页数量（最多100条）
-        # pn: 页码
-        # po: 排序方式
-        # fields: 返回字段
-        
-        all_stocks = []
+        all_stocks: List[StockInfo] = []
         page = 1
-        
+        page_size = 100
+
+        # 默认 fs 参数：全部市场
+        default_fs = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048,m:1+t:2,m:1+t:23'
+        if market == 'sh':
+            fs = 'm:1+t:2,m:1+t:23'
+        elif market == 'sz':
+            fs = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048'
+        else:
+            fs = default_fs
+
         while True:
             params = {
-                'pz': '100',  # 每页100条（最大值）
-                'pn': str(page),
-                'po': '1',     # 按代码排序
-                'fields': 'f1,f2,f3,f4,f12,f13,f14',  # 返回字段：涨跌幅,最新价,涨跌额,成交量,代码,名称,行业
+                'np':    '1',
+                'fltt':  '1',
+                'invt':  '2',
+                'fs':    fs,
+                'fields':'f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23',
+                'fid':   'f3',
+                'pn':    str(page),
+                'pz':    str(page_size),
+                'po':    '1',
+                'dect':  '1',
             }
-            
-            if market == 'sh':
-                params['fs'] = 'm:1'  # 沪市
-            elif market == 'sz':
-                params['fs'] = 'm:0'  # 深市
-            else:
-                params['fs'] = 'm:0+m:1'  # 全部
-            
-            url = f"https://push2.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
-            
-            async with self.rate_limiter_mgr.get_rate_limiter('push2.eastmoney.com'):
-                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
-            
-            if not response or not response.success or not response.data_processor.responses:
-                raise Exception(f"Failed to fetch stock list: {response.status if response else 'No response'}")
-            
-            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
-            
-            if data['rc'] != 0 or not data.get('data', {}).get('diff'):
-                break
-            
-            page_stocks = []
-            for _, item in data['data']['diff'].items():
-                symbol = item['f12']
-            
-                # 过滤掉转债：转债代码通常以12或11开头，且为6位数字
-                if (symbol.startswith('12') or symbol.startswith('11')) and len(symbol) == 6:
-                    continue
-                
-                # 过滤掉其他非股票代码（如指数、基金等）
-                if not (symbol.startswith('0') or symbol.startswith('3') or symbol.startswith('6')):
-                    continue
-                
-                market_code = 'SH' if symbol.startswith('6') else 'SZ'
+            url = f"https://push2delay.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
+            async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
 
+            if not response or not response.success:
+                raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
+
+            payload = json.loads(extract_content(response.content, "html > body > pre"))
+            diff = payload.get('data', {}).get('diff')
+            if not diff:
+                break
+
+            page_stocks: List[StockInfo] = []
+            for rec in diff:
+                code = rec.get('f12', '')
+                name = rec.get('f14', '')
+                # f13: 市场代码，0=SZ, 1=SH
+                mcode = rec.get('f13')
+                if mcode == 1:
+                    mkt = 'SH'
+                elif mcode == 0:
+                    mkt = 'SZ'
+                else:
+                    mkt = str(mcode or '')
                 page_stocks.append(StockInfo(
-                    symbol=symbol,
-                    name=item['f14'],
-                    market=market_code,
-                    industry=item.get('f13', ''),
-                    list_date=''  # 此API不返回上市日期
+                    symbol=code,
+                    name=name,
+                    market=mkt,
                 ))
 
             all_stocks.extend(page_stocks)
-            
-            # 如果当前页数据少于100条，说明已经是最后一页
-            if len(data['data']['diff']) < 100:
+            if len(page_stocks) < page_size:
                 break
-            
             page += 1
-        
+
         logging.info(f"Fetched {len(all_stocks)} stocks for market: {market}")
+        csv_dao.write_records(all_stocks)
         return all_stocks
 
-    @retry(max_retries=3, delay=1)
-    async def fetch_financial_data(self, symbol: str, report_type: str = 'annual') -> List[FinancialData]:
-        """
-        从东方财富获取财务数据，参考 akshare 实现
+    @async_retry(max_retries=3, delay=1)
+    async def fetch_financial_data(self, symbol: str, market: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
+        # 从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         
-        Args:
-            symbol: 股票代码
-            report_type: 报告类型，'annual'=年报，'quarterly'=季报
+        # 示例接口：
+        # 现金流量表 (type=RPT_F10_FINANCE_BCASHFLOW, sty=APP_F10_BCASHFLOW)
+        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BCASHFLOW&sty=APP_F10_BCASHFLOW&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        # 返回字段 NETCASH_OPERATE, NETCASH_INVEST, NETCASH_FINANCE, CCE_ADD
         
-        Returns:
-            财务数据列表
-        """
-        # 东方财富财务数据API
-        # 参数说明：
-        # reportName: 数据表名，RPT_LICO_FN_CPD=利润表
-        # filter: 过滤条件，指定股票代码
-        # sortColumns: 排序字段
-        # sortTypes: 排序方式，-1=降序，1=升序
-        # pageSize: 每页数量
-        # pageNumber: 页码
-        # columns: 返回字段
-        financial_data = []
-        page_number = 1
-        page_size = 50  # 每页数量
+        # 利润表 (type=RPT_F10_FINANCE_BINCOME, sty=APP_F10_BINCOME)
+        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BINCOME&sty=APP_F10_BINCOME&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        # 返回字段 OPERATE_INCOME, OPERATE_EXPENSE, OPERATE_PROFIT, TOTAL_PROFIT, PARENT_NETPROFIT, BASIC_EPS
+        
+        # 资产负债表 (type=RPT_F10_FINANCE_BBALANCE, sty=F10_FINANCE_BBALANCE)
+        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BBALANCE&sty=F10_FINANCE_BBALANCE&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        # 返回字段 TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_PARENT_EQUITY
+        
+        tables = [
+            ("RPT_F10_FINANCE_BCASHFLOW", "APP_F10_BCASHFLOW"),
+            ("RPT_F10_FINANCE_BINCOME",    "APP_F10_BINCOME"),
+            ("RPT_F10_FINANCE_BBALANCE",   "F10_FINANCE_BBALANCE"),
+        ]
+        records: Dict[str, Dict[str, Any]] = {}
+        page_size = 50
+        
+        for t, sty in tables:
+            page = 1
+            while True:
+                params = {
+                    "type":  t,
+                    "sty":   sty,
+                    "filter": f'(SECUCODE="{symbol}.{market.upper()}")',
+                    "p":      page,
+                    "ps":     page_size,
+                    "sr":    -1,
+                    "st":   "REPORT_DATE",
+                    "source":"HSF10",
+                    "client":"PC",
+                }
+                url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
+                async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+                    resp = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+                if not resp or not resp.success:
+                    raise Exception(f"Failed to fetch {t} for {symbol}: {resp.error if resp else 'No response'}")
+                
+                payload = json.loads(extract_content(resp.content, "html > body > pre"))
+                rows = payload.get('result', {}).get("data", [])
+                if not rows:
+                    break
+                
+                for itm in rows:
+                    rpt = itm.get("REPORT_DATE", "").split(" ")[0]
+                    rec = records.setdefault(rpt, {"symbol": symbol, "report_date": rpt})
+                    if t == "RPT_F10_FINANCE_BCASHFLOW":
+                        rec["net_operate_cashflow"] = float(itm.get("NETCASH_OPERATE") or 0)
+                        rec["net_invest_cashflow"] = float(itm.get("NETCASH_INVEST") or 0)
+                        rec["net_finance_cashflow"] = float(itm.get("NETCASH_FINANCE") or 0)
+                        rec["free_cashflow"]      = float(itm.get("CCE_ADD") or 0)
+                    elif t == "RPT_F10_FINANCE_BINCOME":
+                        rec["total_revenue"]   = float(itm.get("OPERATE_INCOME") or 0)
+                        rec["operating_cost"]  = float(itm.get("OPERATE_EXPENSE") or 0)
+                        rec["operating_profit"]= float(itm.get("OPERATE_PROFIT") or 0)
+                        rec["profit_before_tax"]= float(itm.get("TOTAL_PROFIT") or 0)
+                        rec["net_profit"]      = float(itm.get("PARENT_NETPROFIT") or 0)
+                        rec["eps"]             = float(itm.get("BASIC_EPS") or 0)
+                        # 计算毛利
+                        rec["gross_profit"] = rec["total_revenue"] - rec["operating_cost"]
+                    else:  # BBALANCE
+                        rec["total_assets"]        = float(itm.get("TOTAL_ASSETS") or 0)
+                        rec["total_liabilities"]   = float(itm.get("TOTAL_LIABILITIES") or 0)
+                        rec["total_equity"]        = float(itm.get("TOTAL_PARENT_EQUITY") or 0)
+                        # 其他资产负债细分留空
+                if len(rows) < page_size:
+                    break
+                page += 1
+        
+        import pdb; pdb.set_trace()
+        # 构建 dataclass 列表
+        result: List[FinancialData] = []
+        for rpt, rec in sorted(records.items(), reverse=True):
+            result.append(
+                FinancialData(
+                    symbol                 = rec["symbol"],
+                    report_date            = rec["report_date"],
+                    total_revenue          = rec.get("total_revenue", 0.0),
+                    operating_cost         = rec.get("operating_cost", 0.0),
+                    gross_profit           = rec.get("gross_profit", 0.0),
+                    operating_profit       = rec.get("operating_profit", 0.0),
+                    profit_before_tax      = rec.get("profit_before_tax", 0.0),
+                    net_profit             = rec.get("net_profit", 0.0),
+                    eps                     = rec.get("eps", 0.0),
+                    roe                     = rec.get("roe", 0.0),
+                    total_assets           = rec.get("total_assets", 0.0),
+                    current_assets         = rec.get("current_assets", 0.0),
+                    non_current_assets     = rec.get("non_current_assets", 0.0),
+                    total_liabilities      = rec.get("total_liabilities", 0.0),
+                    current_liabilities    = rec.get("current_liabilities", 0.0),
+                    non_current_liabilities= rec.get("non_current_liabilities", 0.0),
+                    total_equity           = rec.get("total_equity", 0.0),
+                    net_operate_cashflow   = rec.get("net_operate_cashflow", 0.0),
+                    net_invest_cashflow    = rec.get("net_invest_cashflow", 0.0),
+                    net_finance_cashflow   = rec.get("net_finance_cashflow", 0.0),
+                    free_cashflow          = rec.get("free_cashflow", 0.0),
+                )
+            )
+        csv_dao.write_records(result)
+        return result
 
-        while True:
-            params = {
-                'reportName': 'RPT_LICO_FN_CPD',  # 利润表
-                'filter': f'(SECURITY_CODE="{symbol}")',
-                'sortColumns': 'REPORTDATE',
-                'sortTypes': '-1',
-                'pageSize': str(page_size),
-                'pageNumber': str(page_number),
-                'columns': 'ALL',
-            }
-            
-            url = f"https://datacenter-web.eastmoney.com/api/data/v1/get?{urlencode(params)}"
-            async with self.rate_limiter_mgr.get_rate_limiter('datacenter-web.eastmoney.com'):
-                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
-            
-            if not response or not response.success or not response.data_processor.responses:
-                raise Exception(f"Failed to fetch financial data for {symbol}: {response.status if response else 'No response'}")
-            
-            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
-            if not data.get('result') or not data['result'].get('data'):
-                break  # 没有更多数据
-            
-            page_data = data['result']['data']
-            for item in page_data:
-                financial_data.append(FinancialData(
-                    symbol=symbol,
-                    report_date=item.get('REPORTDATE', ''),
-                    revenue=float(item.get('TOTAL_OPERATE_INCOME', 0)) if 'TOTAL_OPERATE_INCOME' in item and item['TOTAL_OPERATE_INCOME'] else 0,
-                    net_profit=float(item.get('PARENT_NETPROFIT', 0)) if 'PARENT_NETPROFIT' in item and item['PARENT_NETPROFIT'] else 0,
-                    eps=float(item.get('BASIC_EPS', 0)) if 'BASIC_EPS' in item and item['BASIC_EPS'] else 0,
-                    roe=float(item.get('WEIGHTAVG_ROE', 0)) if 'WEIGHTAVG_ROE' in item and item['WEIGHTAVG_ROE'] else 0,
-                    total_assets=float(item.get('TOTAL_ASSETS', 0)) if 'TOTAL_ASSETS' in item and item['TOTAL_ASSETS'] else 0,
-                    total_liabilities=float(item.get('TOTAL_LIABILITIES', 0)) if 'TOTAL_LIABILITIES' in item and item['TOTAL_LIABILITIES'] else 0,
-                ))
-            
-            # 如果当前页数据少于page_size，说明已经是最后一页
-            if len(page_data) < page_size:
-                break
-            
-            page_number += 1  # 查询下一页
-
-        logging.info(f"Fetched a total of {len(financial_data)} financial data records for {symbol}")
-        return financial_data
-
-    @retry(max_retries=3, delay=1)
-    async def fetch_dividend_data(self, symbol: str) -> List[DividendData]:
+    @async_retry(max_retries=3, delay=1)
+    async def fetch_dividend_data(self, symbol: str, csv_dao: CSVGenericDAO[DividendData]) -> List[DividendData]:
         """
         从东方财富获取除权除息数据
         
@@ -428,13 +484,13 @@ class MarketDataFetcher:
             logging.info(f"Fetching dividend data for {symbol}, page {page_number}, URL: {url}")
             
             async with self.rate_limiter_mgr.get_rate_limiter('datacenter-web.eastmoney.com'):
-                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers, filter_func=lambda x: x.url == url)
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
             
-            if not response or not response.success or not response.data_processor.responses:
-                raise Exception(f"Failed to fetch dividend data for {symbol}: {response.status if response else 'No response'}")
-            
-            data = json.loads(from_str_to_bytes(response.data_processor.responses[0].body).decode('utf-8'))
-            
+            if not response or not response.success:
+                raise Exception(f"Failed to fetch dividend data for {symbol}: {response.error if response else 'No response'}")
+
+            data = json.loads(extract_content(response.content, "html > body > pre"))
+
             if not data.get('result') or not data['result'].get('data'):
                 break  # 没有更多数据
             
@@ -455,6 +511,8 @@ class MarketDataFetcher:
             page_number += 1  # 查询下一页
         
         logging.info(f"Fetched {len(dividend_data)} dividend data records for {symbol}")
+
+        csv_dao.write_records(dividend_data)
         return dividend_data
 
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
@@ -470,25 +528,39 @@ if __name__ == '__main__':
         rate_limiter_mgr.add_rate_limiter('hq.sinajs.cn', RateLimiter(max_concurrent=5, max_requests_per_minute=60))
         rate_limiter_mgr.add_rate_limiter('*.eastmoney.com', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=15))
         
-        async with AntiDetectionSpider() as spider:
-            fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
+        with ExitStack() as stack:
+            async with AsyncExitStack() as async_stack:
+                spider = await async_stack.enter_async_context(AntiDetectionSpider())
+                fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
 
-            # 创建定时器函数，运行指定时间后返回False
-            def create_timer_check_func(duration_seconds: int):
-                start_time = time.time()
-                def check_func():
-                    return time.time() - start_time < duration_seconds
-                return check_func
-            
-            tasks = [
-                async_call_loop(fetcher.fetch_realtime_quotes, ['000001'], interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
-                async_call_loop(fetcher.fetch_realtime_quotes, ['000002'], interval=1.0, check_func=create_timer_check_func(60), ignore_exceptions=True),  # 运行60秒
-                fetcher.fetch_stock_list('all'),
-                fetcher.fetch_historical_data('000001', '2023-01-01', '2023-12-31', klt='101', fqt='0'),
-                fetcher.fetch_dividend_data('000001'),
-                fetcher.fetch_financial_data('000001', report_type='annual'),
-            ]
-            await asyncio.gather(*tasks)
-    
+                # 创建定时器函数，运行指定时间后返回False
+                def create_timer_check_func(duration_seconds: int):
+                    start_time = time.time()
+                    def check_func():
+                        return time.time() - start_time < duration_seconds
+                    return check_func
+
+                os.remove('realtime_quotes.csv') if os.path.exists('realtime_quotes.csv') else None
+                os.remove('historical_data.csv') if os.path.exists('historical_data.csv') else None
+                os.remove('stock_list.csv') if os.path.exists('stock_list.csv') else None
+                os.remove('financial_data.csv') if os.path.exists('financial_data.csv') else None
+                os.remove('dividend_data.csv') if os.path.exists('dividend_data.csv') else None
+
+                realtime_quote_csv_dao = stack.enter_context(CSVGenericDAO('realtime_quotes.csv', RealTimeQuote))
+                historical_data_csv_dao = stack.enter_context(CSVGenericDAO('historical_data.csv', HistoricalData))
+                stock_info_csv_dao = stack.enter_context(CSVGenericDAO('stock_list.csv', StockInfo))
+                financial_data_csv_dao = stack.enter_context(CSVGenericDAO('financial_data.csv', FinancialData))
+                dividend_data_csv_dao = stack.enter_context(CSVGenericDAO('dividend_data.csv', DividendData))
+
+                tasks = [
+                    #async_call_loop(fetcher.fetch_realtime_quotes, ['000001', '000002'], realtime_quote_csv_dao, interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
+                    #fetcher.fetch_historical_data('000001', '2025-01-01', '2025-07-13', historical_data_csv_dao, klt='101', fqt='0'),
+                    #fetcher.fetch_stock_list(stock_info_csv_dao, 'all'),
+                    #fetcher.fetch_financial_data('000001', 'SZ', financial_data_csv_dao),
+                    
+                    #fetcher.fetch_dividend_data('000001', dividend_data_csv_dao),
+                ]
+                await asyncio.gather(*tasks)
+
     # 运行异步函数
     asyncio.run(main())

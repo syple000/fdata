@@ -9,6 +9,8 @@ import logging
 import os
 import json
 
+from fdata.utils.retry import retry
+
 from .config import SpiderConfig
 from .data_processor import DataProcessor, ResponseData
 from ..utils.exec_time_cost import exec_time_cost
@@ -250,12 +252,13 @@ class AntiDetectionSpider:
         return responses
     
     @exec_time_cost
+    @retry(max_retries=3, delay=2, ignore_exceptions=False)
     async def crawl_url(self, url: str,
         headers: Optional[Dict[str, str]] = None,
         crawl_after_random_interval: bool = False, 
         timeout: int = 30000, 
         output_dir: str = "output", 
-        filter_func: Optional[Callable[[ResponseData], bool]] = None,
+        filter_func: Optional[Callable[[ResponseData], bool]] = lambda _: False,
         actions: Optional[List[Dict[str, Any]]] = None,
     ) -> CrawlResult:
         '''
@@ -353,3 +356,23 @@ class AntiDetectionSpider:
                 timestamp=datetime.now().isoformat(),
                 error="Max retries exceeded"
             )
+
+if __name__ == '__main__':
+    import asyncio
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+
+    async def main():
+        spider = AntiDetectionSpider(auto_cookie=True)
+        async with spider:
+            result = await spider.crawl_url(
+                url="https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=SZ000001&color=b#/cwfx",
+                crawl_after_random_interval=True,
+                timeout=30000,
+                output_dir="output",
+                filter_func=lambda r: r.status == 200,
+            )
+            result.data_processor.save_to_json("crawl_result.json")
+
+    asyncio.run(main())
