@@ -31,6 +31,30 @@ class RealTimeQuote:
     prev_close: float # 昨收价
     timestamp: str # 数据时间 2023-10-01 09:30:00
 
+    # 买1-5数据
+    buy1_price: float
+    buy1_volume: int
+    buy2_price: float
+    buy2_volume: int
+    buy3_price: float
+    buy3_volume: int
+    buy4_price: float
+    buy4_volume: int
+    buy5_price: float
+    buy5_volume: int
+
+    # 卖1-5数据
+    sell1_price: float
+    sell1_volume: int
+    sell2_price: float
+    sell2_volume: int
+    sell3_price: float
+    sell3_volume: int
+    sell4_price: float
+    sell4_volume: int
+    sell5_price: float
+    sell5_volume: int
+
 
 @dataclass
 class HistoricalData:
@@ -86,17 +110,6 @@ class FinancialData:
     free_cashflow: float             # 自由现金流（FREE_CASH_FLOW）
 
 
-@dataclass
-class DividendData:
-    """除权除息数据结构"""
-    symbol: str
-    ex_date: str  # 除权除息日
-    dividend_per_share: float  # 每股分红
-    bonus_share_ratio: float   # 送股比例
-    rights_issue_ratio: float  # 配股比例
-    rights_issue_price: float  # 配股价格
-
-
 class MarketDataFetcher:
     """市场数据获取器"""
     
@@ -135,10 +148,15 @@ class MarketDataFetcher:
         # 转换股票代码格式：000001 -> sz000001, 600000 -> sh600000
         sina_symbols = []
         for symbol in symbols:
-            if symbol.startswith('6'):
-                sina_symbols.append(f'sh{symbol}')
-            else:
-                sina_symbols.append(f'sz{symbol}')
+            code, market = symbol.split('.')
+            if market.upper() not in ['SH', 'SZ', 'BJ']:
+                raise Exception(f"Unsupported market type: {market}. Expected 'SH', 'SZ', or 'BJ'.")
+            if market.upper() == 'SH':
+                sina_symbols.append(f"sh{code}")
+            elif market.upper() == 'SZ':
+                sina_symbols.append(f"sz{code}")
+            else: # market.upper() == 'BJ'
+                sina_symbols.append(f"bj{code}")
         
         # 新浪实时行情API：返回JavaScript格式数据
         # 参数：list为股票代码，用逗号分隔
@@ -161,8 +179,8 @@ class MarketDataFetcher:
                 raise Exception(f"Invalid data format in line {i + 1}: {line}")
                 
             # 解析新浪返回的数据格式
-            # var hq_str_sz000001="平安银行,10.13,10.14,10.11,10.17,10.08,10.11,10.12,..."
-            left_part, right_part, = line.split('=')
+            # var hq_str_sh600000="浦发银行,14.170,14.200,13.800,14.240,13.800,13.800,13.810,161683677,2258575044.000,354522,13.800,154900,13.790,393300,13.780,106500,13.770,79700,13.760,1000,13.810,700,13.820,6000,13.830,9700,13.840,52300,13.850,2025-07-11,15:00:03,00,"
+            left_part, right_part = line.split('=')
             if symbols[i] not in left_part:
                 raise Exception(f"Symbol mismatch: {symbols[i]} not found in {left_part}")
 
@@ -182,7 +200,31 @@ class MarketDataFetcher:
                 high_price=float(fields[4]),       # 最高价
                 low_price=float(fields[5]),        # 最低价
                 prev_close=float(fields[2]),       # 昨收价
-                timestamp=f"{fields[30]} {fields[31]}"  # 行情时间
+                timestamp=f"{fields[30]} {fields[31]}",  # 行情时间
+
+                # 买1-5数据
+                buy1_price=float(fields[11]),
+                buy1_volume=int(fields[10]),
+                buy2_price=float(fields[13]),
+                buy2_volume=int(fields[12]),
+                buy3_price=float(fields[15]),
+                buy3_volume=int(fields[14]),
+                buy4_price=float(fields[17]),
+                buy4_volume=int(fields[16]),
+                buy5_price=float(fields[19]),
+                buy5_volume=int(fields[18]),
+
+                # 卖1-5数据
+                sell1_price=float(fields[21]),
+                sell1_volume=int(fields[20]),
+                sell2_price=float(fields[23]),
+                sell2_volume=int(fields[22]),
+                sell3_price=float(fields[25]),
+                sell3_volume=int(fields[24]),
+                sell4_price=float(fields[27]),
+                sell4_volume=int(fields[26]),
+                sell5_price=float(fields[29]),
+                sell5_volume=int(fields[28]),
             )
             quotes.append(quote)
         
@@ -197,7 +239,7 @@ class MarketDataFetcher:
         从东方财富获取历史行情数据
         
         Args:
-            symbol: 股票代码，如'000001'
+            symbol: 股票代码，如'000001.SZ' 或 '600000.SH'
             start_date: 开始日期，格式'YYYY-MM-DD'
             end_date: 结束日期，格式'YYYY-MM-DD'
         
@@ -206,10 +248,13 @@ class MarketDataFetcher:
         """
 
         # 转换股票代码格式
-        if symbol.startswith('6'):
-            secid = f'1.{symbol}'  # 沪市
-        else:
-            secid = f'0.{symbol}'  # 深市
+        code, market = symbol.split('.')
+        if market.upper() not in ['SH', 'SZ', 'BJ']:
+            raise Exception(f"Unsupported market type: {market}. Expected 'SH' or 'SZ' or 'BJ'.")
+        if market.upper() == 'SH':
+            secid = f'1.{code}'
+        else: # market.upper() == 'SZ' or market.upper() == 'BJ'
+            secid = f'0.{code}'
         
         # 东方财富历史数据API
         # 参数说明：
@@ -265,12 +310,9 @@ class MarketDataFetcher:
         return historical_data
 
     @async_retry(max_retries=3, delay=1)
-    async def fetch_stock_list(self, csv_dao: CSVGenericDAO[StockInfo], market: str = 'all') -> List[StockInfo]:
+    async def fetch_stock_list(self, csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富新版 push2delay 接口获取股票列表
-        
-        Args:
-            market: 市场类型，'sh'=沪市，'sz'=深市，'all'=全部
         
         Returns:
             股票信息列表
@@ -280,68 +322,62 @@ class MarketDataFetcher:
         page_size = 100
 
         # 默认 fs 参数：全部市场
-        default_fs = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048,m:1+t:2,m:1+t:23'
-        if market == 'sh':
-            fs = 'm:1+t:2,m:1+t:23'
-        elif market == 'sz':
-            fs = 'm:0+t:6,m:0+t:80,m:0+t:81+s:2048'
-        else:
-            fs = default_fs
+        sh_a = 'm:1+t:2,m:1+t:23'
+        sz_a = 'm:0+t:6,m:0+t:80'
+        bj_a = 'm:0+t:81+s:2048'
+        markets = {
+            'SH': sh_a,
+            'SZ': sz_a,
+            'BJ': bj_a,
+        }
+        
+        for market, fs in markets.items():
+            while True:
+                params = {
+                    'np':    '1',
+                    'fltt':  '1',
+                    'invt':  '2',
+                    'fs':    fs,
+                    'fields':'f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23',
+                    'fid':   'f3',
+                    'pn':    str(page),
+                    'pz':    str(page_size),
+                    'po':    '1',
+                    'dect':  '1',
+                }
+                url = f"https://push2delay.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
+                async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
+                    response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
 
-        while True:
-            params = {
-                'np':    '1',
-                'fltt':  '1',
-                'invt':  '2',
-                'fs':    fs,
-                'fields':'f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23',
-                'fid':   'f3',
-                'pn':    str(page),
-                'pz':    str(page_size),
-                'po':    '1',
-                'dect':  '1',
-            }
-            url = f"https://push2delay.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
-            async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
-                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+                if not response or not response.success:
+                    raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
 
-            if not response or not response.success:
-                raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
+                payload = json.loads(extract_content(response.content, "html > body > pre"))
+                diff = payload.get('data', {}).get('diff')
+                if not diff:
+                    break
 
-            payload = json.loads(extract_content(response.content, "html > body > pre"))
-            diff = payload.get('data', {}).get('diff')
-            if not diff:
-                break
+                page_stocks: List[StockInfo] = []
+                for rec in diff:
+                    code = rec.get('f12', '')
+                    name = rec.get('f14', '')
+                    page_stocks.append(StockInfo(
+                        symbol=f"{code}.{market}",
+                        name=name,
+                        market=market,
+                    ))
 
-            page_stocks: List[StockInfo] = []
-            for rec in diff:
-                code = rec.get('f12', '')
-                name = rec.get('f14', '')
-                # f13: 市场代码，0=SZ, 1=SH
-                mcode = rec.get('f13')
-                if mcode == 1:
-                    mkt = 'SH'
-                elif mcode == 0:
-                    mkt = 'SZ'
-                else:
-                    mkt = str(mcode or '')
-                page_stocks.append(StockInfo(
-                    symbol=code,
-                    name=name,
-                    market=mkt,
-                ))
-
-            all_stocks.extend(page_stocks)
-            if len(page_stocks) < page_size:
-                break
-            page += 1
+                all_stocks.extend(page_stocks)
+                if len(page_stocks) < page_size:
+                    break
+                page += 1
 
         logging.info(f"Fetched {len(all_stocks)} stocks for market: {market}")
         csv_dao.write_records(all_stocks)
         return all_stocks
 
     @async_retry(max_retries=3, delay=1)
-    async def fetch_financial_data(self, symbol: str, market: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
+    async def fetch_financial_data(self, symbol: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
         # 从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         
         # 示例接口：
@@ -371,7 +407,7 @@ class MarketDataFetcher:
                 params = {
                     "type":  t,
                     "sty":   sty,
-                    "filter": f'(SECUCODE="{symbol}.{market.upper()}")',
+                    "filter": f'(SECUCODE="{symbol}")',
                     "p":      page,
                     "ps":     page_size,
                     "sr":    -1,
@@ -416,7 +452,6 @@ class MarketDataFetcher:
                     break
                 page += 1
         
-        import pdb; pdb.set_trace()
         # 构建 dataclass 列表
         result: List[FinancialData] = []
         for rpt, rec in sorted(records.items(), reverse=True):
@@ -430,8 +465,8 @@ class MarketDataFetcher:
                     operating_profit       = rec.get("operating_profit", 0.0),
                     profit_before_tax      = rec.get("profit_before_tax", 0.0),
                     net_profit             = rec.get("net_profit", 0.0),
-                    eps                     = rec.get("eps", 0.0),
-                    roe                     = rec.get("roe", 0.0),
+                    eps                    = rec.get("eps", 0.0),
+                    roe                    = (rec.get("net_profit", 0.0) / rec.get("total_equity", 1.0)) * 100 if rec.get("total_equity", 0.0) > 0 else 0.0,
                     total_assets           = rec.get("total_assets", 0.0),
                     current_assets         = rec.get("current_assets", 0.0),
                     non_current_assets     = rec.get("non_current_assets", 0.0),
@@ -447,73 +482,6 @@ class MarketDataFetcher:
             )
         csv_dao.write_records(result)
         return result
-
-    @async_retry(max_retries=3, delay=1)
-    async def fetch_dividend_data(self, symbol: str, csv_dao: CSVGenericDAO[DividendData]) -> List[DividendData]:
-        """
-        从东方财富获取除权除息数据
-        
-        Args:
-            symbol: 股票代码
-        
-        Returns:
-            除权除息数据列表
-        """
-        
-        # 东方财富除权除息数据API
-        dividend_data = []
-        page_number = 1
-        page_size = 50  # 每页数量
-
-        while True:
-            params = {
-                'reportName': 'RPT_SHAREBONUS_DET',
-                'columns': 'ALL',  # 返回所有字段
-                'quoteColumns': '',
-                'pageNumber': str(page_number),  # 页码
-                'pageSize': str(page_size),     # 每页数量
-                'sortColumns': 'PLAN_NOTICE_DATE',  # 排序字段
-                'sortTypes': '1',   # 升序排序
-                'source': 'WEB',
-                'client': 'WEB',
-                'filter': f'(SECURITY_CODE="{symbol}")'  # 过滤条件，指定股票代码
-            }
-            
-            url = f"https://datacenter-web.eastmoney.com/api/data/v1/get?{urlencode(params)}"
-
-            logging.info(f"Fetching dividend data for {symbol}, page {page_number}, URL: {url}")
-            
-            async with self.rate_limiter_mgr.get_rate_limiter('datacenter-web.eastmoney.com'):
-                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
-            
-            if not response or not response.success:
-                raise Exception(f"Failed to fetch dividend data for {symbol}: {response.error if response else 'No response'}")
-
-            data = json.loads(extract_content(response.content, "html > body > pre"))
-
-            if not data.get('result') or not data['result'].get('data'):
-                break  # 没有更多数据
-            
-            for item in data['result']['data']:
-                dividend_data.append(DividendData(
-                    symbol=symbol,
-                    ex_date=item.get('EX_DIVIDEND_DATE', ''),
-                    dividend_per_share=float(item.get('CASH_DIVIDEND_RATIO', 0)) / 10,  # 转换为每股分红
-                    bonus_share_ratio=float(item.get('BONUS_SHARE_RATIO', 0)) / 10,     # 转换为每10股送股数
-                    rights_issue_ratio=float(item.get('ALLOTMENT_RATIO', 0)) / 10,      # 转换为每10股配股数
-                    rights_issue_price=float(item.get('ALLOTMENT_PRICE', 0))
-                ))
-            
-            # 如果当前页数据少于page_size，说明已经是最后一页
-            if len(data['result']['data']) < page_size:
-                break
-            
-            page_number += 1  # 查询下一页
-        
-        logging.info(f"Fetched {len(dividend_data)} dividend data records for {symbol}")
-
-        csv_dao.write_records(dividend_data)
-        return dividend_data
 
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
         """将数据对象转换为字典格式，便于持久化存储"""
@@ -550,15 +518,12 @@ if __name__ == '__main__':
                 historical_data_csv_dao = stack.enter_context(CSVGenericDAO('historical_data.csv', HistoricalData))
                 stock_info_csv_dao = stack.enter_context(CSVGenericDAO('stock_list.csv', StockInfo))
                 financial_data_csv_dao = stack.enter_context(CSVGenericDAO('financial_data.csv', FinancialData))
-                dividend_data_csv_dao = stack.enter_context(CSVGenericDAO('dividend_data.csv', DividendData))
 
                 tasks = [
-                    #async_call_loop(fetcher.fetch_realtime_quotes, ['000001', '000002'], realtime_quote_csv_dao, interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
+                    async_call_loop(fetcher.fetch_realtime_quotes, ['000001', '000002'], realtime_quote_csv_dao, interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
                     #fetcher.fetch_historical_data('000001', '2025-01-01', '2025-07-13', historical_data_csv_dao, klt='101', fqt='0'),
                     #fetcher.fetch_stock_list(stock_info_csv_dao, 'all'),
                     #fetcher.fetch_financial_data('000001', 'SZ', financial_data_csv_dao),
-                    
-                    #fetcher.fetch_dividend_data('000001', dividend_data_csv_dao),
                 ]
                 await asyncio.gather(*tasks)
 
