@@ -22,11 +22,11 @@ class MarketDataDumper:
         await self.fetcher.fetch_stock_list(csv_dao)
 
     # 实时行情数据
-    async def dump_realtime_data(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote], break_signal: Callable[[], bool], send_event: Callable[[List[RealTimeQuote]], None]):
+    async def dump_realtime_data(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote], continue_signal: Callable[[], bool], send_event: Callable[[List[RealTimeQuote]], None]):
         while True:
             data = await self.fetcher.fetch_realtime_quotes(symbols, csv_dao)
             send_event(data)
-            if break_signal():
+            if not continue_signal():
                 break
 
     # 历史行情数据
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('functions', help='Function to execute: stock_list, realtime, historical, financial')
+    parser.add_argument('functions', help='Function to execute: stock_list,realtime,historical,financial')
 
     parser.add_argument('--directory', default='output', help='Directory to save CSV files')
     
@@ -56,7 +56,9 @@ if __name__ == "__main__":
     parser.add_argument('--end_date', help='End date for historical data (YYYY-MM-DD)')
     parser.add_argument('--kline_type', choices=['5m', '15m', '30m', '60m', 'daily', 'weekly', 'monthly'], default='daily', help='K-line type for historical data')
     parser.add_argument('--adjust_type', choices=['none', 'forward', 'backward'], default='none', help='Adjust type for historical data')
-    
+
+    parser.add_argument('--today_date', default=datetime.now().strftime('%Y-%m-%d'), help='Today date in YYYY-MM-DD format')
+
     args = parser.parse_args()
     if args.symbols:
         args.symbols = [symbol.strip() for symbol in args.symbols.split(',') if symbol.strip()]
@@ -74,7 +76,7 @@ if __name__ == "__main__":
  
                 async def execute_function(function: str):
                     if function == 'stock_list':
-                        csv_path = os.path.join(args.directory, 'stock_list', datetime.now().strftime('%Y%m%d'))
+                        csv_path = os.path.join(args.directory, 'stock_list', args.today_date)
                         if not os.path.exists(csv_path):
                             os.makedirs(csv_path)
                         if os.path.exists(os.path.join(csv_path, 'stock_list.csv')):
@@ -85,7 +87,7 @@ if __name__ == "__main__":
                         if not args.symbols:
                             raise ValueError("Symbols must be provided for realtime data")
 
-                        csv_path = os.path.join(args.directory, 'realtime_quotes', datetime.now().strftime('%Y%m%d'), str(args.batch_num))
+                        csv_path = os.path.join(args.directory, 'realtime_quotes', args.today_date, str(args.batch_num))
                         if not os.path.exists(csv_path):
                             os.makedirs(csv_path)
                         if os.path.exists(os.path.join(csv_path, 'realtime_quotes.csv')):
@@ -98,15 +100,15 @@ if __name__ == "__main__":
                                 return time.time() - start_time < duration_seconds
                             return check_func
 
-                        break_signal = create_timer_check_func(args.duration)
+                        continue_signal = create_timer_check_func(int(args.duration))
                         # 未来需要发送到交易平台 todo
                         send_event = lambda data: logging.info(f"Received {len(data)} realtime quotes")
-                        await dumper.dump_realtime_data(args.symbols, realtime_quote_csv_dao, break_signal, send_event)
+                        await dumper.dump_realtime_data(args.symbols, realtime_quote_csv_dao, continue_signal, send_event)
                     elif function == 'historical':
                         if not args.symbols or not args.start_date or not args.end_date:
                             raise ValueError("Symbols, start_date, and end_date must be provided for historical data")
 
-                        csv_path = os.path.join(args.directory, 'historical_data', datetime.now().strftime('%Y%m%d'), str(args.batch_num), str(args.start_date)+'_'+str(args.end_date), str(args.kline_type), str(args.adjust_type))
+                        csv_path = os.path.join(args.directory, 'historical_data', args.today_date, str(args.batch_num), str(args.start_date)+'_'+str(args.end_date), str(args.kline_type), str(args.adjust_type))
                         if not os.path.exists(csv_path):
                             os.makedirs(csv_path)
                         if os.path.exists(os.path.join(csv_path, 'historical_data.csv')):
@@ -145,7 +147,7 @@ if __name__ == "__main__":
                         if not args.symbols:
                             raise ValueError("Symbols must be provided for financial data")
 
-                        csv_path = os.path.join(args.directory, 'financial_data', datetime.now().strftime('%Y%m%d'), str(args.batch_num))
+                        csv_path = os.path.join(args.directory, 'financial_data', args.today_date, str(args.batch_num))
                         if not os.path.exists(csv_path):
                             os.makedirs(csv_path)
                         if os.path.exists(os.path.join(csv_path, 'financial_data.csv')):

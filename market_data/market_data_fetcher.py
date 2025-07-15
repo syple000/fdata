@@ -291,8 +291,8 @@ class MarketDataFetcher:
         # end: 结束日期
         params = {
             'secid': secid,
-            'klt': klt,  # 日K线
-            'fqt': fqt,    # 前复权
+            'klt': klt.value,  # 日K线
+            'fqt': fqt.value,    # 前复权
             'beg': start_date.replace('-', ''),
             'end': end_date.replace('-', ''),
             'fields1': 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13',
