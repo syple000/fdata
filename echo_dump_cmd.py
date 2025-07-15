@@ -7,7 +7,6 @@ python -m fdata.market_data.market_data_dumper \
 {functions} \
 --directory output \
 --symbols {symbols} \
---batch_num {batch_num} \
 --duration {duration} \
 --start_date {start_date} \
 --kline_type {kline_type} \
@@ -45,31 +44,17 @@ if __name__ == '__main__': # 只执行股票相关的dump功能；仅做命令�
     if args.duration <= 0:
         args.duration = int(datetime.strptime(args.today + ' ' + '15:30:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp())
     
-    batchs = []
     stock_list = pd.read_csv(args.stock_list_path, dtype=str)
     symbols = stock_list['symbol'].tolist()
-    index = 0
-    while index < len(symbols):
-        batch = []
-        while True:
-            batch.append(symbols[index])
-            index += 1
-            if index % 100 == 0 or index >= len(symbols):
-                break
-        if len(batch) > 0:
-            batchs.append(','.join(batch))
-
-    for index, batch in enumerate(batchs):
-        cmd = cmd.format(
-            env=args.env,
-            functions=args.functions,
-            symbols=batch,
-            batch_num=index,
-            duration=args.duration,
-            start_date=args.start_date,
-            kline_type=args.kline_type,
-            adjust_type=args.adjust_type,
-            today=args.today,
-        )
-        print(cmd)
+    cmd = cmd.format(
+        env=args.env,
+        functions=args.functions,
+        symbols=','.join(symbols),
+        duration=args.duration,
+        start_date=args.start_date,
+        kline_type=args.kline_type,
+        adjust_type=args.adjust_type,
+        today=args.today,
+    )
+    print(cmd)
         

@@ -39,6 +39,10 @@ class MarketDataDumper:
         for symbol in symbols:
             await self.fetcher.fetch_financial_data(symbol, csv_dao)
 
+def chunk_symbols(symbols: List[str], batch_size: int) -> List[List[str]]:
+    """将股票符号列表分割成指定大小的批次"""
+    return [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -48,7 +52,6 @@ if __name__ == "__main__":
     parser.add_argument('--directory', default='output', help='Directory to save CSV files')
     
     parser.add_argument('--symbols', default='', help='List of stock symbols (for realtime, historical, financial)')
-    parser.add_argument('--batch_num', type=int, default=0, help='Batch num for processing symbols')
     
     parser.add_argument('--duration', type=int, default=30, help='Duration in seconds for realtime data fetching')
     
@@ -68,104 +71,105 @@ if __name__ == "__main__":
         rate_limiter_mgr.add_rate_limiter('hq.sinajs.cn', RateLimiter(max_concurrent=1, min_interval=1, max_requests_per_minute=60)) # 秒级tick
         rate_limiter_mgr.add_rate_limiter('*.eastmoney.com', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=20)) # 获取离线数据，5s间隔
         
-        with ExitStack() as stack:
-            async with AsyncExitStack() as async_stack:
-                spider = await async_stack.enter_async_context(AntiDetectionSpider())
-                fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
-                dumper = MarketDataDumper(fetcher)
- 
-                async def execute_function(function: str):
-                    if function == 'stock_list':
-                        csv_path = os.path.join(args.directory, 'stock_list', args.today_date)
-                        if not os.path.exists(csv_path):
-                            os.makedirs(csv_path)
-                        if os.path.exists(os.path.join(csv_path, 'stock_list.csv')):
-                            os.remove(os.path.join(csv_path, 'stock_list.csv'))
-                        stock_info_csv_dao = stack.enter_context(CSVGenericDAO(os.path.join(csv_path, 'stock_list.csv'), StockInfo))
+        async with AsyncExitStack() as async_stack:
+            spider = await async_stack.enter_async_context(AntiDetectionSpider())
+            fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
+            dumper = MarketDataDumper(fetcher)
+
+            # symbols过多时，需要做切割，分多批次执行
+            symbol_chunks = chunk_symbols(args.symbols, 100) if args.symbols else []
+
+            async def execute_function(function: str, symbols: List[str], batch_num: int):
+                if function == 'stock_list':
+                    csv_path = os.path.join(args.directory, 'stock_list', args.today_date)
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'stock_list.csv')):
+                        os.remove(os.path.join(csv_path, 'stock_list.csv'))
+                    with CSVGenericDAO(os.path.join(csv_path, 'stock_list.csv'), StockInfo) as stock_info_csv_dao:
                         await dumper.dump_stock_list(stock_info_csv_dao)
-                    elif function == 'realtime':
-                        if not args.symbols:
-                            raise ValueError("Symbols must be provided for realtime data")
+                elif function == 'realtime':
+                    if not symbols:
+                        raise ValueError("Symbols must be provided for realtime data")
 
-                        csv_path = os.path.join(args.directory, 'realtime_quotes', args.today_date, str(args.batch_num))
-                        if not os.path.exists(csv_path):
-                            os.makedirs(csv_path)
-                        if os.path.exists(os.path.join(csv_path, 'realtime_quotes.csv')):
-                            os.remove(os.path.join(csv_path, 'realtime_quotes.csv'))
-                        realtime_quote_csv_dao = stack.enter_context(CSVGenericDAO(os.path.join(csv_path, 'realtime_quotes.csv'), RealTimeQuote))
+                    csv_path = os.path.join(args.directory, 'realtime_quotes', args.today_date, str(batch_num))
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'realtime_quotes.csv')):
+                        os.remove(os.path.join(csv_path, 'realtime_quotes.csv'))
 
-                        def create_timer_check_func(duration_seconds: int):
-                            start_time = time.time()
-                            def check_func():
-                                return time.time() - start_time < duration_seconds
-                            return check_func
+                    def create_timer_check_func(duration_seconds: int):
+                        start_time = time.time()
+                        def check_func():
+                            return time.time() - start_time < duration_seconds
+                        return check_func
 
-                        continue_signal = create_timer_check_func(int(args.duration))
-                        # 未来需要发送到交易平台 todo
-                        send_event = lambda data: logging.info(f"Received {len(data)} realtime quotes")
-                        await dumper.dump_realtime_data(args.symbols, realtime_quote_csv_dao, continue_signal, send_event)
-                    elif function == 'historical':
-                        if not args.symbols or not args.start_date or not args.end_date:
-                            raise ValueError("Symbols, start_date, and end_date must be provided for historical data")
+                    continue_signal = create_timer_check_func(int(args.duration))
+                    # 未来需要发送到交易平台 todo
+                    send_event = lambda data: logging.info(f"Received {len(data)} realtime quotes")
+                    with CSVGenericDAO(os.path.join(csv_path, 'realtime_quotes.csv'), RealTimeQuote) as realtime_quote_csv_dao:
+                        await dumper.dump_realtime_data(symbols, realtime_quote_csv_dao, continue_signal, send_event)
+                elif function == 'historical':
+                    if not symbols or not args.start_date or not args.end_date:
+                        raise ValueError("Symbols, start_date, and end_date must be provided for historical data")
 
-                        csv_path = os.path.join(args.directory, 'historical_data', args.today_date, str(args.batch_num), str(args.start_date)+'_'+str(args.end_date), str(args.kline_type), str(args.adjust_type))
-                        if not os.path.exists(csv_path):
-                            os.makedirs(csv_path)
-                        if os.path.exists(os.path.join(csv_path, 'historical_data.csv')):
-                            os.remove(os.path.join(csv_path, 'historical_data.csv'))
+                    csv_path = os.path.join(args.directory, 'historical_data', args.today_date, str(batch_num), str(args.start_date)+'_'+str(args.end_date), str(args.kline_type), str(args.adjust_type))
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'historical_data.csv')):
+                        os.remove(os.path.join(csv_path, 'historical_data.csv'))
 
-                        historical_data_csv_dao = stack.enter_context(CSVGenericDAO(os.path.join(csv_path, 'historical_data.csv'), HistoricalData))
-
-                        if args.kline_type == '5m':
-                            kline_type = KLineType.MIN5
-                        elif args.kline_type == '15m':
-                            kline_type = KLineType.MIN15
-                        elif args.kline_type == '30m':
-                            kline_type = KLineType.MIN30
-                        elif args.kline_type == '60m':
-                            kline_type = KLineType.MIN60
-                        elif args.kline_type == 'daily':
-                            kline_type = KLineType.DAILY
-                        elif args.kline_type == 'weekly':
-                            kline_type = KLineType.WEEKLY
-                        elif args.kline_type == 'monthly':
-                            kline_type = KLineType.MONTHLY
-                        else:
-                            raise ValueError(f"Invalid kline_type: {args.kline_type}")
-
-                        if args.adjust_type == 'none':
-                            adjust_type = AdjustType.NONE
-                        elif args.adjust_type == 'forward':
-                            adjust_type = AdjustType.FORWARD
-                        elif args.adjust_type == 'backward':
-                            adjust_type = AdjustType.BACKWARD
-                        else:
-                            raise ValueError(f"Invalid adjust_type: {args.adjust_type}")
-
-                        await dumper.dump_historical_data(args.symbols, args.start_date, args.end_date, historical_data_csv_dao, kline_type, adjust_type)
-                    elif function == 'financial':
-                        if not args.symbols:
-                            raise ValueError("Symbols must be provided for financial data")
-
-                        csv_path = os.path.join(args.directory, 'financial_data', args.today_date, str(args.batch_num))
-                        if not os.path.exists(csv_path):
-                            os.makedirs(csv_path)
-                        if os.path.exists(os.path.join(csv_path, 'financial_data.csv')):
-                            os.remove(os.path.join(csv_path, 'financial_data.csv'))
-                        financial_data_csv_dao = stack.enter_context(CSVGenericDAO(os.path.join(csv_path, 'financial_data.csv'), FinancialData))
-
-                        await dumper.dump_financial_data(args.symbols, financial_data_csv_dao)
+                    if args.kline_type == '5m':
+                        kline_type = KLineType.MIN5
+                    elif args.kline_type == '15m':
+                        kline_type = KLineType.MIN15
+                    elif args.kline_type == '30m':
+                        kline_type = KLineType.MIN30
+                    elif args.kline_type == '60m':
+                        kline_type = KLineType.MIN60
+                    elif args.kline_type == 'daily':
+                        kline_type = KLineType.DAILY
+                    elif args.kline_type == 'weekly':
+                        kline_type = KLineType.WEEKLY
+                    elif args.kline_type == 'monthly':
+                        kline_type = KLineType.MONTHLY
                     else:
-                        raise ValueError(f"Invalid function: {function}")
-                
-                tasks = []
-                functions = args.functions.split(',')
-                for function in functions:
-                    function = function.strip()
-                    if function not in ['stock_list', 'realtime', 'historical', 'financial']:
-                        raise ValueError(f"Invalid function: {function}")
-                    tasks.append(asyncio.create_task(execute_function(function)))
-                
-                await asyncio.gather(*tasks)
+                        raise ValueError(f"Invalid kline_type: {args.kline_type}")
+
+                    if args.adjust_type == 'none':
+                        adjust_type = AdjustType.NONE
+                    elif args.adjust_type == 'forward':
+                        adjust_type = AdjustType.FORWARD
+                    elif args.adjust_type == 'backward':
+                        adjust_type = AdjustType.BACKWARD
+                    else:
+                        raise ValueError(f"Invalid adjust_type: {args.adjust_type}")
+
+                    with CSVGenericDAO(os.path.join(csv_path, 'historical_data.csv'), HistoricalData) as historical_data_csv_dao:
+                        await dumper.dump_historical_data(symbols, args.start_date, args.end_date, historical_data_csv_dao, kline_type, adjust_type)
+                elif function == 'financial':
+                    if not symbols:
+                        raise ValueError("Symbols must be provided for financial data")
+
+                    csv_path = os.path.join(args.directory, 'financial_data', args.today_date, str(batch_num))
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'financial_data.csv')):
+                        os.remove(os.path.join(csv_path, 'financial_data.csv'))
+                    with CSVGenericDAO(os.path.join(csv_path, 'financial_data.csv'), FinancialData) as financial_data_csv_dao:
+                        await dumper.dump_financial_data(symbols, financial_data_csv_dao)
+                else:
+                    raise ValueError(f"Invalid function: {function}")
+            
+            tasks = []
+            functions = args.functions.split(',')
+            for function in functions:
+                function = function.strip()
+                if function not in ['stock_list', 'realtime', 'historical', 'financial']:
+                    raise ValueError(f"Invalid function: {function}")
+                for index, symbols in enumerate(symbol_chunks):
+                    tasks.append(asyncio.create_task(execute_function(function, symbols, index)))
+            
+            await asyncio.gather(*tasks)
                
     asyncio.run(main())
