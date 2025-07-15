@@ -136,21 +136,30 @@ class MarketDataFetcher:
         
         # 新浪财经实时行情headers
         self.sina_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept": "*/*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "zh-CN,zh;q=0.9",
             "Connection": "keep-alive",
-            "Referer": "https://finance.sina.com.cn/",
+            "Referer": "https://finance.sina.com.cn/stock/",
+            "Sec-Fetch-Dest": "script",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Storage-Access": "active",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\""
         }
         
         # 东方财富headers
         self.eastmoney_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.146 Safari/537.36",
+            "sec-ch-ua-platform": "\"Windows\"",
             "Referer": "http://quote.eastmoney.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"",
+            "sec-ch-ua-mobile": "?0"
         }
 
-    @async_retry(max_retries=-1, delay=1, ignore_exceptions=True)
+    @async_retry(max_retries=1, delay=0, ignore_exceptions=True)
     async def fetch_realtime_quotes(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
         """
         从新浪财经获取实时行情
@@ -250,7 +259,7 @@ class MarketDataFetcher:
         csv_dao.write_records(quotes)
         return quotes
 
-    @async_retry(max_retries=-1, delay=1, ignore_exceptions=True)
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
     async def fetch_historical_data(self, symbol: str, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
         """
         从东方财富获取历史行情数据
@@ -301,8 +310,8 @@ class MarketDataFetcher:
 
         data = json.loads(extract_content(response.content, "html > body > pre"))
 
-        if data['rc'] != 0 or not data.get('data', {}).get('klines'):
-            raise Exception(f"No historical data found for {symbol}")
+        if data['rc'] != 0 or not data['data'] or not data['data']['klines']:
+            return []
         
         historical_data = []
         for kline in data['data']['klines']:
@@ -334,7 +343,6 @@ class MarketDataFetcher:
             股票信息列表
         """
         all_stocks: List[StockInfo] = []
-        page = 1
         page_size = 100
 
         # 默认 fs 参数：全部市场
@@ -348,8 +356,9 @@ class MarketDataFetcher:
         }
         
         for market, fs in markets.items():
+            page = 1
             while True:
-                @async_retry(max_retries=-1, delay=1, ignore_exceptions=True)
+                @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
                 async def _fetch_stock_list():
                     params = {
                         'np':    '1',
@@ -371,7 +380,9 @@ class MarketDataFetcher:
                         raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
 
                     payload = json.loads(extract_content(response.content, "html > body > pre"))
-                    diff = payload.get('data', {}).get('diff')
+                    if not payload['data']:
+                        return False
+                    diff = payload['data']['diff']
                     if not diff:
                         return False
 
@@ -395,7 +406,7 @@ class MarketDataFetcher:
                     break
                 page += 1
 
-        logging.info(f"Fetched {len(all_stocks)} stocks for market: {market}")
+        logging.info(f"Fetched {len(all_stocks)} stocks")
         csv_dao.write_records(all_stocks)
         return all_stocks
 
@@ -426,7 +437,7 @@ class MarketDataFetcher:
         for t, sty in tables:
             page = 1
             while True:
-                @async_retry(max_retries=-1, delay=1, ignore_exceptions=True)
+                @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
                 async def _fetch_financial_data():
                     params = {
                         "type":  t,
@@ -446,7 +457,9 @@ class MarketDataFetcher:
                         raise Exception(f"Failed to fetch {t} for {symbol}: {resp.error if resp else 'No response'}")
 
                     payload = json.loads(extract_content(resp.content, "html > body > pre"))
-                    rows = payload.get('result', {}).get("data", [])
+                    if not payload['result']:
+                        return False
+                    rows = payload['result']["data"]
                     if not rows:
                         return False
                     
