@@ -32,6 +32,7 @@ def extract_single_stock_financial_data(dump_dir, dump_date, archive_dir):
                 
                 # 保存到目标目录
                 output_file = os.path.join(output_dir, 'financial.csv')
+                group_df = group_df.sort_values(by='report_date')
                 group_df.to_csv(output_file, index=False, encoding='utf-8')
 
 def extract_single_stock_historical_data(dump_dir, dump_date, archive_dir):
@@ -75,6 +76,7 @@ def extract_single_stock_historical_data(dump_dir, dump_date, archive_dir):
 
                             # 保存到目标目录
                             output_file = os.path.join(output_dir, f'historical_data_{kline_type}_{adjust_type}.csv')
+                            group_df = group_df.sort_values(by='date')
                             group_df.to_csv(output_file, index=False, encoding='utf-8')
 
 def extract_single_stock_realtime_quotes(dump_dir, dump_date, archive_dir):
@@ -103,6 +105,9 @@ def extract_single_stock_realtime_quotes(dump_dir, dump_date, archive_dir):
                 
                 # 保存到目标目录
                 output_file = os.path.join(output_dir, 'realtime_quotes.csv')
+                # group_df对时间timestamp（2025-07-16 15:35:15）去重
+                group_df = group_df.drop_duplicates(subset=['timestamp'])
+                group_df = group_df.sort_values(by='timestamp')  # 按时间排序
                 group_df.to_csv(output_file, index=False, encoding='utf-8')
 
 if __name__ == '__main__':

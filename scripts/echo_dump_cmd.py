@@ -42,7 +42,7 @@ if __name__ == '__main__': # 只执行股票相关的dump功能；仅做命令�
     args = parser.parse_args()
 
     if args.duration <= 0:
-        args.duration = int(datetime.strptime(args.today + ' ' + '15:30:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp())
+        args.duration = int(datetime.strptime(args.today + ' ' + '15:50:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp())
     
     stock_list = pd.read_csv(args.stock_list_path, dtype=str)
     symbols = stock_list['symbol'].tolist()
