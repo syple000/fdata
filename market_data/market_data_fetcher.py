@@ -411,83 +411,91 @@ class MarketDataFetcher:
         return all_stocks
 
     async def fetch_financial_data(self, symbol: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
-        # 从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
+        """
+        从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         
-        # 示例接口：
-        # 现金流量表 (type=RPT_F10_FINANCE_BCASHFLOW, sty=APP_F10_BCASHFLOW)
-        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BCASHFLOW&sty=APP_F10_BCASHFLOW&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        # 返回字段 NETCASH_OPERATE, NETCASH_INVEST, NETCASH_FINANCE, CCE_ADD
+        API接口示例：
+        - 资产负债表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GBALANCE&sty=F10_FINANCE_GBALANCE&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        - 利润表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GINCOME&sty=APP_F10_GINCOME&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        - 现金流量表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GCASHFLOW&sty=APP_F10_GCASHFLOW&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
         
-        # 利润表 (type=RPT_F10_FINANCE_BINCOME, sty=APP_F10_BINCOME)
-        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BINCOME&sty=APP_F10_BINCOME&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        # 返回字段 OPERATE_INCOME, OPERATE_EXPENSE, OPERATE_PROFIT, TOTAL_PROFIT, PARENT_NETPROFIT, BASIC_EPS
-        
-        # 资产负债表 (type=RPT_F10_FINANCE_BBALANCE, sty=F10_FINANCE_BBALANCE)
-        # GET https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BBALANCE&sty=F10_FINANCE_BBALANCE&filter=(SECUCODE="000001.SZ")&p=1&ps=50&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        # 返回字段 TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_PARENT_EQUITY
+        主要字段：
+        - 资产负债表: TOTAL_ASSETS, TOTAL_CURRENT_ASSETS, TOTAL_NONCURRENT_ASSETS, TOTAL_LIABILITIES, TOTAL_CURRENT_LIAB, TOTAL_NONCURRENT_LIAB, TOTAL_EQUITY
+        - 利润表: TOTAL_OPERATE_INCOME, OPERATE_COST, OPERATE_PROFIT, TOTAL_PROFIT, PARENT_NETPROFIT, BASIC_EPS
+        - 现金流量表: NETCASH_OPERATE, NETCASH_INVEST, NETCASH_FINANCE, CCE_ADD
+        """
         
         tables = [
-            ("RPT_F10_FINANCE_BCASHFLOW", "APP_F10_BCASHFLOW"),
-            ("RPT_F10_FINANCE_BINCOME",    "APP_F10_BINCOME"),
-            ("RPT_F10_FINANCE_BBALANCE",   "F10_FINANCE_BBALANCE"),
+            ("RPT_F10_FINANCE_GBALANCE", "F10_FINANCE_GBALANCE"),   # 资产负债表
+            ("RPT_F10_FINANCE_GINCOME", "APP_F10_GINCOME"),         # 利润表
+            ("RPT_F10_FINANCE_GCASHFLOW", "APP_F10_GCASHFLOW"),     # 现金流量表
         ]
         records: Dict[str, Dict[str, Any]] = {}
         page_size = 50
         
-        for t, sty in tables:
+        for table_type, sty in tables:
             page = 1
             while True:
                 @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
                 async def _fetch_financial_data():
                     params = {
-                        "type":  t,
-                        "sty":   sty,
+                        "type": table_type,
+                        "sty": sty,
                         "filter": f'(SECUCODE="{symbol}")',
-                        "p":      page,
-                        "ps":     page_size,
-                        "sr":    -1,
-                        "st":   "REPORT_DATE",
-                        "source":"HSF10",
-                        "client":"PC",
+                        "p": page,
+                        "ps": page_size,
+                        "sr": -1,
+                        "st": "REPORT_DATE",
+                        "source": "HSF10",
+                        "client": "PC",
                     }
                     url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
                     async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
                         resp = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
                     if not resp or not resp.success:
-                        raise Exception(f"Failed to fetch {t} for {symbol}: {resp.error if resp else 'No response'}")
+                        raise Exception(f"Failed to fetch {table_type} for {symbol}: {resp.error if resp else 'No response'}")
 
                     payload = json.loads(extract_content(resp.content, "html > body > pre"))
-                    if not payload['result']:
+                    if not payload.get('result') or not payload['result'].get('data'):
                         return False
-                    rows = payload['result']["data"]
+                    
+                    rows = payload['result']['data']
                     if not rows:
                         return False
                     
-                    for itm in rows:
-                        rpt = itm.get("REPORT_DATE", "").split(" ")[0]
-                        rec = records.setdefault(rpt, {"symbol": symbol, "report_date": rpt})
-                        if t == "RPT_F10_FINANCE_BCASHFLOW":
-                            rec["net_operate_cashflow"] = float(itm.get("NETCASH_OPERATE") or 0)
-                            rec["net_invest_cashflow"] = float(itm.get("NETCASH_INVEST") or 0)
-                            rec["net_finance_cashflow"] = float(itm.get("NETCASH_FINANCE") or 0)
-                            rec["free_cashflow"]      = float(itm.get("CCE_ADD") or 0)
-                        elif t == "RPT_F10_FINANCE_BINCOME":
-                            rec["total_revenue"]   = float(itm.get("OPERATE_INCOME") or 0)
-                            rec["operating_cost"]  = float(itm.get("OPERATE_EXPENSE") or 0)
-                            rec["operating_profit"]= float(itm.get("OPERATE_PROFIT") or 0)
-                            rec["profit_before_tax"]= float(itm.get("TOTAL_PROFIT") or 0)
-                            rec["net_profit"]      = float(itm.get("PARENT_NETPROFIT") or 0)
-                            rec["eps"]             = float(itm.get("BASIC_EPS") or 0)
-                            # 计算毛利
-                            rec["gross_profit"] = rec["total_revenue"] - rec["operating_cost"]
-                        else:  # BBALANCE
-                            rec["total_assets"]        = float(itm.get("TOTAL_ASSETS") or 0)
-                            rec["total_liabilities"]   = float(itm.get("TOTAL_LIABILITIES") or 0)
-                            rec["total_equity"]        = float(itm.get("TOTAL_PARENT_EQUITY") or 0)
-                            # 其他资产负债细分留空
+                    for item in rows:
+                        report_date = item.get("REPORT_DATE", "").split(" ")[0]
+                        if not report_date:
+                            continue
+                            
+                        record = records.setdefault(report_date, {"symbol": symbol, "report_date": report_date})
+                        
+                        if table_type == "RPT_F10_FINANCE_GBALANCE":  # 资产负债表
+                            record["total_assets"] = float(item.get("TOTAL_ASSETS") or 0)
+                            record["current_assets"] = float(item.get("TOTAL_CURRENT_ASSETS") or 0)
+                            record["non_current_assets"] = float(item.get("TOTAL_NONCURRENT_ASSETS") or 0)
+                            record["total_liabilities"] = float(item.get("TOTAL_LIABILITIES") or 0)
+                            record["current_liabilities"] = float(item.get("TOTAL_CURRENT_LIAB") or 0)
+                            record["non_current_liabilities"] = float(item.get("TOTAL_NONCURRENT_LIAB") or 0)
+                            record["total_equity"] = float(item.get("TOTAL_EQUITY") or 0)
+                        elif table_type == "RPT_F10_FINANCE_GINCOME":  # 利润表
+                            record["total_revenue"] = float(item.get("TOTAL_OPERATE_INCOME") or 0)
+                            record["operating_cost"] = float(item.get("OPERATE_COST") or 0)
+                            record["operating_profit"] = float(item.get("OPERATE_PROFIT") or 0)
+                            record["profit_before_tax"] = float(item.get("TOTAL_PROFIT") or 0)
+                            record["net_profit"] = float(item.get("PARENT_NETPROFIT") or 0)
+                            record["eps"] = float(item.get("BASIC_EPS") or 0)
+                            # 毛利 = 营业收入 - 营业成本
+                            record["gross_profit"] = record["total_revenue"] - record["operating_cost"]
+                        elif table_type == "RPT_F10_FINANCE_GCASHFLOW":  # 现金流量表
+                            record["net_operate_cashflow"] = float(item.get("NETCASH_OPERATE") or 0)
+                            record["net_invest_cashflow"] = float(item.get("NETCASH_INVEST") or 0)
+                            record["net_finance_cashflow"] = float(item.get("NETCASH_FINANCE") or 0)
+                            record["free_cashflow"] = record["net_operate_cashflow"] - float(item.get('CONSTRUCT_LONG_ASSET') or 0)
+                    
                     if len(rows) < page_size:
                         return False
-
+                    
                     return True
 
                 continue_fetch = await _fetch_financial_data()
@@ -495,34 +503,41 @@ class MarketDataFetcher:
                     break
                 page += 1
         
-        # 构建 dataclass 列表
+        # 构建 FinancialData 列表
         result: List[FinancialData] = []
-        for rpt, rec in sorted(records.items(), reverse=True):
+        for report_date, record in sorted(records.items(), reverse=True):
+            # 计算 ROE (净资产收益率) = 归属母公司净利润 / 归属母公司股东权益 * 100
+            roe = 0.0
+            if record.get("total_equity", 0.0) > 0:
+                roe = (record.get("net_profit", 0.0) / record.get("total_equity", 1.0)) * 100
+            
             result.append(
                 FinancialData(
-                    symbol                 = rec["symbol"],
-                    report_date            = rec["report_date"],
-                    total_revenue          = rec.get("total_revenue", 0.0),
-                    operating_cost         = rec.get("operating_cost", 0.0),
-                    gross_profit           = rec.get("gross_profit", 0.0),
-                    operating_profit       = rec.get("operating_profit", 0.0),
-                    profit_before_tax      = rec.get("profit_before_tax", 0.0),
-                    net_profit             = rec.get("net_profit", 0.0),
-                    eps                    = rec.get("eps", 0.0),
-                    roe                    = (rec.get("net_profit", 0.0) / rec.get("total_equity", 1.0)) * 100 if rec.get("total_equity", 0.0) > 0 else 0.0,
-                    total_assets           = rec.get("total_assets", 0.0),
-                    current_assets         = rec.get("current_assets", 0.0),
-                    non_current_assets     = rec.get("non_current_assets", 0.0),
-                    total_liabilities      = rec.get("total_liabilities", 0.0),
-                    current_liabilities    = rec.get("current_liabilities", 0.0),
-                    non_current_liabilities= rec.get("non_current_liabilities", 0.0),
-                    total_equity           = rec.get("total_equity", 0.0),
-                    net_operate_cashflow   = rec.get("net_operate_cashflow", 0.0),
-                    net_invest_cashflow    = rec.get("net_invest_cashflow", 0.0),
-                    net_finance_cashflow   = rec.get("net_finance_cashflow", 0.0),
-                    free_cashflow          = rec.get("free_cashflow", 0.0),
+                    symbol=record["symbol"],
+                    report_date=record["report_date"],
+                    total_revenue=record.get("total_revenue", 0.0),
+                    operating_cost=record.get("operating_cost", 0.0),
+                    gross_profit=record.get("gross_profit", 0.0),
+                    operating_profit=record.get("operating_profit", 0.0),
+                    profit_before_tax=record.get("profit_before_tax", 0.0),
+                    net_profit=record.get("net_profit", 0.0),
+                    eps=record.get("eps", 0.0),
+                    roe=roe,
+                    total_assets=record.get("total_assets", 0.0),
+                    current_assets=record.get("current_assets", 0.0),
+                    non_current_assets=record.get("non_current_assets", 0.0),
+                    total_liabilities=record.get("total_liabilities", 0.0),
+                    current_liabilities=record.get("current_liabilities", 0.0),
+                    non_current_liabilities=record.get("non_current_liabilities", 0.0),
+                    total_equity=record.get("total_equity", 0.0),
+                    net_operate_cashflow=record.get("net_operate_cashflow", 0.0),
+                    net_invest_cashflow=record.get("net_invest_cashflow", 0.0),
+                    net_finance_cashflow=record.get("net_finance_cashflow", 0.0),
+                    free_cashflow=record.get("free_cashflow", 0.0),
                 )
             )
+        
+        logging.info(f"Fetched {len(result)} financial data records for {symbol}")
         csv_dao.write_records(result)
         return result
 
