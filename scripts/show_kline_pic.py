@@ -77,8 +77,11 @@ if __name__ == '__main__':
     # Convert 'Date' column to datetime
     df['Date'] = pd.to_datetime(df['Date'])
 
+    # 过滤最近的365条数据
+    df = df.sort_values(by='Date').tail(365)
+
     # Set 'Date' as the index
     df.set_index('Date', inplace=True)
 
     # Save the K-line chart as an image using mplfinance
-    mpf.plot(df, type='line', volume=True, title=f"K-line chart for {args.symbol}", savefig=f"{args.symbol}_kline_chart.png")
+    mpf.plot(df, type='candle', volume=True, title=f"K-line chart for {args.symbol}", style='yahoo', savefig=f"{args.symbol}_kline_chart.png")
