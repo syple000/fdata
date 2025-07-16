@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
                     continue_signal = create_timer_check_func(int(args.duration))
                     # 未来需要发送到交易平台 todo
-                    send_event = lambda data: logging.info(f"Received {len(data)} realtime quotes")
+                    send_event = lambda data: logging.info(f"Received realtime quotes")
                     with CSVGenericDAO(os.path.join(csv_path, 'realtime_quotes.csv'), RealTimeQuote) as realtime_quote_csv_dao:
                         await dumper.dump_realtime_data(symbols, realtime_quote_csv_dao, continue_signal, send_event)
                 elif function == 'historical':
