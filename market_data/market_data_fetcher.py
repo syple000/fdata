@@ -92,48 +92,83 @@ class MarketDataFetcher:
                 raise Exception(f"Symbol mismatch: {symbols[i]} not found in {left_part}")
 
             fields = right_part.strip('";\n').split(',')
-            if len(fields) < 32:
-                raise Exception(f"Insufficient data fields for symbol {symbols[i]}: {fields}")
-            
-            quote = RealTimeQuote(
-                symbol=symbols[i],
-                name=fields[0],                    # 股票名称
-                price=float(fields[3]),            # 当前价格
-                change=float(fields[3]) - float(fields[2]),  # 涨跌额
-                change_percent=((float(fields[3]) - float(fields[2])) / float(fields[2])) * 100,  # 涨跌幅
-                volume=int(fields[8]),             # 成交量(股)
-                turnover=float(fields[9]),         # 成交额
-                open_price=float(fields[1]),       # 开盘价
-                high_price=float(fields[4]),       # 最高价
-                low_price=float(fields[5]),        # 最低价
-                prev_close=float(fields[2]),       # 昨收价
-                timestamp=f"{fields[30]} {fields[31]}",  # 行情时间
 
-                # 买1-5数据
-                buy1_price=float(fields[11]),
-                buy1_volume=int(fields[10]),
-                buy2_price=float(fields[13]),
-                buy2_volume=int(fields[12]),
-                buy3_price=float(fields[15]),
-                buy3_volume=int(fields[14]),
-                buy4_price=float(fields[17]),
-                buy4_volume=int(fields[16]),
-                buy5_price=float(fields[19]),
-                buy5_volume=int(fields[18]),
+            if symbols[i].type == Type.INDEX.value:
+                if len(fields) < 6:
+                    raise Exception(f"Insufficient data fields for index {symbols[i]}: {fields}")
+                # 指数数据格式：名称,当前价格,涨跌额,涨跌幅,成交量,成交额
+                quote = RealTimeQuote(
+                    symbol=symbols[i],
+                    name=fields[0],                    # 指数名称
+                    price=float(fields[1]),            # 当前价格
+                    change=float(fields[2]),           # 涨跌额
+                    change_percent=float(fields[3]),   # 涨跌幅
+                    volume=int(fields[4]),             # 成交量
+                    turnover=float(fields[5]),         # 成交额
+                    open_price=0.0,                    # 指数无开盘价
+                    high_price=0.0,                    # 指数无最高价
+                    low_price=0.0,                     # 指数无最低价
+                    prev_close=float(fields[1]) - float(fields[2]),  # 昨收价 = 当前价 - 涨跌额
+                    timestamp="",                      # 指数无具体时间戳
 
-                # 卖1-5数据
-                sell1_price=float(fields[21]),
-                sell1_volume=int(fields[20]),
-                sell2_price=float(fields[23]),
-                sell2_volume=int(fields[22]),
-                sell3_price=float(fields[25]),
-                sell3_volume=int(fields[24]),
-                sell4_price=float(fields[27]),
-                sell4_volume=int(fields[26]),
-                sell5_price=float(fields[29]),
-                sell5_volume=int(fields[28]),
-            )
-            quotes.append(quote)
+                    # 指数无买卖盘数据
+                    buy1_price=0.0, buy1_volume=0,
+                    buy2_price=0.0, buy2_volume=0,
+                    buy3_price=0.0, buy3_volume=0,
+                    buy4_price=0.0, buy4_volume=0,
+                    buy5_price=0.0, buy5_volume=0,
+                    sell1_price=0.0, sell1_volume=0,
+                    sell2_price=0.0, sell2_volume=0,
+                    sell3_price=0.0, sell3_volume=0,
+                    sell4_price=0.0, sell4_volume=0,
+                    sell5_price=0.0, sell5_volume=0,
+                )
+                quotes.append(quote)
+            elif symbols[i].type == Type.STOCK.value:
+                if len(fields) < 32:
+                    raise Exception(f"Insufficient data fields for symbol {symbols[i]}: {fields}")
+
+                quote = RealTimeQuote(
+                    symbol=symbols[i],
+                    name=fields[0],                    # 股票名称
+                    price=float(fields[3]),            # 当前价格
+                    change=float(fields[3]) - float(fields[2]),  # 涨跌额
+                    change_percent=((float(fields[3]) - float(fields[2])) / float(fields[2])) * 100,  # 涨跌幅
+                    volume=int(fields[8]),             # 成交量(股)
+                    turnover=float(fields[9]),         # 成交额
+                    open_price=float(fields[1]),       # 开盘价
+                    high_price=float(fields[4]),       # 最高价
+                    low_price=float(fields[5]),        # 最低价
+                    prev_close=float(fields[2]),       # 昨收价
+                    timestamp=f"{fields[30]} {fields[31]}",  # 行情时间
+
+                    # 买1-5数据
+                    buy1_price=float(fields[11]),
+                    buy1_volume=int(fields[10]),
+                    buy2_price=float(fields[13]),
+                    buy2_volume=int(fields[12]),
+                    buy3_price=float(fields[15]),
+                    buy3_volume=int(fields[14]),
+                    buy4_price=float(fields[17]),
+                    buy4_volume=int(fields[16]),
+                    buy5_price=float(fields[19]),
+                    buy5_volume=int(fields[18]),
+
+                    # 卖1-5数据
+                    sell1_price=float(fields[21]),
+                    sell1_volume=int(fields[20]),
+                    sell2_price=float(fields[23]),
+                    sell2_volume=int(fields[22]),
+                    sell3_price=float(fields[25]),
+                    sell3_volume=int(fields[24]),
+                    sell4_price=float(fields[27]),
+                    sell4_volume=int(fields[26]),
+                    sell5_price=float(fields[29]),
+                    sell5_volume=int(fields[28]),
+                )
+                quotes.append(quote)
+            else:
+                raise Exception(f"Unsupported symbol type: {symbols[i].type}. Only STOCK and INDEX are supported.")
         
         logging.info(f"Fetched {len(quotes)} realtime quotes for symbols: {', '.join([x.code + '.' + x.market for x in symbols])}, detail info: {', '.join([f'{q.symbol}: {q.price} ({q.change_percent:.2f}%)' for q in quotes])}")
 
