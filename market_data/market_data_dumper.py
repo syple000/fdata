@@ -10,7 +10,7 @@ from datetime import datetime
 from fdata.dao.csv_dao import CSVGenericDAO
 from fdata.market_data.market_data_fetcher import MarketDataFetcher, RealTimeQuote, RateLimiterManager, RateLimiter
 from fdata.market_data.market_data_fetcher import KLineType, AdjustType
-from fdata.market_data.market_data_fetcher import HistoricalData,StockInfo,FinancialData
+from fdata.market_data.market_data_fetcher import HistoricalData, Symbol, FinancialData, StockInfo
 from fdata.spider.spider_core import AntiDetectionSpider
 
 class MarketDataDumper:
@@ -18,11 +18,11 @@ class MarketDataDumper:
         self.fetcher = fetcher
 
     # 市场所有股票
-    async def dump_stock_list(self, csv_dao: CSVGenericDAO[StockInfo]):
-        await self.fetcher.fetch_stock_list(csv_dao)
+    async def dump_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]):
+        await self.fetcher.fetch_stock_list(market_names, csv_dao)
 
     # 实时行情数据
-    async def dump_realtime_data(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote], continue_signal: Callable[[], bool], send_event: Callable[[List[RealTimeQuote]], None]):
+    async def dump_realtime_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote], continue_signal: Callable[[], bool], send_event: Callable[[List[RealTimeQuote]], None]):
         while True:
             data = await self.fetcher.fetch_realtime_quotes(symbols, csv_dao)
             send_event(data)
@@ -30,16 +30,16 @@ class MarketDataDumper:
                 break
 
     # 历史行情数据
-    async def dump_historical_data(self, symbols: List[str], start_date: str, end_date: str, csv_dao: CSVGenericDAO[RealTimeQuote], kline_type: KLineType, adjust_type: AdjustType):
+    async def dump_historical_data(self, symbols: List[Symbol], start_date: str, end_date: str, csv_dao: CSVGenericDAO[RealTimeQuote], kline_type: KLineType, adjust_type: AdjustType):
         for symbol in symbols:
-            await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao)
+            await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao, kline_type, adjust_type)
 
     # 历史财务数据
-    async def dump_financial_data(self, symbols: List[str], csv_dao: CSVGenericDAO[HistoricalData]):
+    async def dump_financial_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[HistoricalData]):
         for symbol in symbols:
             await self.fetcher.fetch_financial_data(symbol, csv_dao)
 
-def chunk_symbols(symbols: List[str], batch_size: int) -> List[List[str]]:
+def chunk_symbols(symbols: List[Symbol], batch_size: int) -> List[List[Symbol]]:
     """将股票符号列表分割成指定大小的批次"""
     return [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
 
@@ -59,12 +59,16 @@ if __name__ == "__main__":
     parser.add_argument('--end_date', help='End date for historical data (YYYY-MM-DD)')
     parser.add_argument('--kline_type', choices=['5m', '15m', '30m', '60m', 'daily', 'weekly', 'monthly'], default='daily', help='K-line type for historical data')
     parser.add_argument('--adjust_type', choices=['none', 'forward', 'backward'], default='none', help='Adjust type for historical data')
+    
+    parser.add_argument('--market_names', default='上证指数,深证成指,北交所', help='List of market names for stock list fetching')
 
     parser.add_argument('--today_date', default=datetime.now().strftime('%Y-%m-%d'), help='Today date in YYYY-MM-DD format')
 
     args = parser.parse_args()
     if args.symbols:
-        args.symbols = [symbol.strip() for symbol in args.symbols.split(',') if symbol.strip()]
+        args.symbols = [Symbol.from_string(symbol.strip()) for symbol in args.symbols.split(',') if symbol.strip()]
+    if args.market_names:
+        args.market_names = [name.strip() for name in args.market_names.split(',') if name.strip()]
 
     async def main():
         rate_limiter_mgr = RateLimiterManager()
@@ -84,10 +88,10 @@ if __name__ == "__main__":
                     csv_path = os.path.join(args.directory, 'stock_list', args.today_date)
                     if not os.path.exists(csv_path):
                         os.makedirs(csv_path)
-                    if os.path.exists(os.path.join(csv_path, 'stock_list.csv')):
-                        os.remove(os.path.join(csv_path, 'stock_list.csv'))
-                    with CSVGenericDAO(os.path.join(csv_path, 'stock_list.csv'), StockInfo) as stock_info_csv_dao:
-                        await dumper.dump_stock_list(stock_info_csv_dao)
+                    if os.path.exists(os.path.join(csv_path, f"{'.'.join(args.market_names)}_stock_list.csv")):
+                        os.remove(os.path.join(csv_path, f"{'.'.join(args.market_names)}_stock_list.csv"))
+                    with CSVGenericDAO(os.path.join(csv_path, f"{'.'.join(args.market_names)}_stock_list.csv"), StockInfo) as stock_info_csv_dao:
+                        await dumper.dump_stock_list(args.market_names, stock_info_csv_dao)
                 elif function == 'realtime':
                     if not symbols:
                         raise ValueError("Symbols must be provided for realtime data")

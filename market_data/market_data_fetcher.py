@@ -1,135 +1,23 @@
 import asyncio
 import json
 import time
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Any
+from dataclasses import asdict
 from urllib.parse import urlencode
 import logging
 import os
-from enum import Enum
 from contextlib import ExitStack, AsyncExitStack
 from ..spider.rate_limiter import RateLimiter, RateLimiterManager
 from ..spider.spider_core import AntiDetectionSpider
 from ..utils.retry import async_retry
-from ..utils.bytes_str_convert import from_bytes_to_str, from_str_to_bytes
 from ..utils.call_loop import async_call_loop
 from ..utils.parse_html_elem import extract_content
 from ..dao.csv_dao import CSVGenericDAO
-
-class KLineType(Enum):
-    """K线类型"""
-    DAILY = '101'       # 日线
-    WEEKLY = '102'      # 周线
-    MONTHLY = '103'     # 月线
-    MIN5 = '5'          # 5分钟线
-    MIN15 = '15'        # 15分钟线
-    MIN30 = '30'        # 30分钟线
-    MIN60 = '60'        # 60分钟线
-
-class AdjustType(Enum):
-    """复权类型"""
-    NONE = '0'          # 不复权
-    FORWARD = '1'       # 前复权
-    BACKWARD = '2'      # 后复权
-
-@dataclass
-class RealTimeQuote:
-    """实时行情数据结构"""
-    symbol: str  # 股票代码
-    name: str    # 股票名称
-    price: float # 当前价格
-    change: float # 涨跌额
-    change_percent: float # 涨跌幅
-    volume: int  # 成交量
-    turnover: float # 成交额
-    open_price: float # 开盘价
-    high_price: float # 最高价
-    low_price: float  # 最低价
-    prev_close: float # 昨收价
-    timestamp: str # 数据时间 2023-10-01 09:30:00
-
-    # 买1-5数据
-    buy1_price: float
-    buy1_volume: int
-    buy2_price: float
-    buy2_volume: int
-    buy3_price: float
-    buy3_volume: int
-    buy4_price: float
-    buy4_volume: int
-    buy5_price: float
-    buy5_volume: int
-
-    # 卖1-5数据
-    sell1_price: float
-    sell1_volume: int
-    sell2_price: float
-    sell2_volume: int
-    sell3_price: float
-    sell3_volume: int
-    sell4_price: float
-    sell4_volume: int
-    sell5_price: float
-    sell5_volume: int
-
-
-@dataclass
-class HistoricalData:
-    """历史行情数据结构"""
-    symbol: str
-    date: str
-    open_price: float
-    high_price: float
-    low_price: float
-    close_price: float
-    volume: int
-    turnover: float
-    change_percent: float
-
-
-@dataclass
-class StockInfo:
-    """股票基本信息"""
-    symbol: str
-    name: str
-    market: str  # 市场类型：SH/SZ
-
-
-@dataclass
-class FinancialData:
-    """财务数据结构，包含利润表、资产负债表和现金流量表的重要字段"""
-    symbol: str
-    report_date: str
-
-    # 利润表
-    total_revenue: float             # 营业收入（TOTAL_OPERATE_INCOME）
-    operating_cost: float            # 营业成本（OPERATE_COST）
-    gross_profit: float              # 毛利润（GROSS_PROFIT）
-    operating_profit: float          # 营业利润（OPERATE_PROFIT）
-    profit_before_tax: float         # 利润总额（TOTAL_PROFIT）
-    net_profit: float                # 归属母公司所有者的净利润（PARENT_NETPROFIT）
-    eps: float                        # 每股收益（BASIC_EPS）
-    roe: float                        # 净资产收益率（WEIGHTAVG_ROE）
-
-    # 资产负债表
-    total_assets: float              # 资产总计（TOTAL_ASSETS）
-    current_assets: float            # 流动资产合计（CURRENT_ASSETS）
-    non_current_assets: float        # 非流动资产合计（NON_CURRENT_ASSETS）
-    total_liabilities: float         # 负债合计（TOTAL_LIABILITIES）
-    current_liabilities: float       # 流动负债合计（CURRENT_LIABILITIES）
-    non_current_liabilities: float   # 非流动负债合计（NON_CURRENT_LIABILITIES）
-    total_equity: float              # 股东权益合计（TOTAL_EQUITY）
-
-    # 现金流量表
-    net_operate_cashflow: float      # 经营活动产生的现金流量净额（NET_CASH_OPER_ACT）
-    net_invest_cashflow: float       # 投资活动产生的现金流量净额（NET_CASH_INVEST_ACT）
-    net_finance_cashflow: float      # 筹资活动产生的现金流量净额（NET_CASH_FINA_ACT）
-    free_cashflow: float             # 自由现金流（FREE_CASH_FLOW）
-
+from .models import *
+from .market_stock_list_fs import MARKET_STOCK_LIST_FS
 
 class MarketDataFetcher:
     """市场数据获取器"""
-    
     def __init__(self, rate_limiter_mgr: RateLimiterManager, spider: AntiDetectionSpider):
         self.rate_limiter_mgr = rate_limiter_mgr
         self.spider = spider
@@ -160,29 +48,22 @@ class MarketDataFetcher:
         }
 
     @async_retry(max_retries=1, delay=0, ignore_exceptions=True)
-    async def fetch_realtime_quotes(self, symbols: List[str], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
+    async def fetch_realtime_quotes(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
         """
-        从新浪财经获取实时行情
-        
-        Args:
-            symbols: 股票代码列表，格式如['000001', '000002']
+        从新浪财经获取实时行情，支持股票和指数
         
         Returns:
             实时行情数据列表
         """
         
-        # 转换股票代码格式：000001 -> sz000001, 600000 -> sh600000
         sina_symbols = []
         for symbol in symbols:
-            code, market = symbol.split('.')
-            if market.upper() not in ['SH', 'SZ', 'BJ']:
-                raise Exception(f"Unsupported market type: {market}. Expected 'SH', 'SZ', or 'BJ'.")
-            if market.upper() == 'SH':
-                sina_symbols.append(f"sh{code}")
-            elif market.upper() == 'SZ':
-                sina_symbols.append(f"sz{code}")
-            else: # market.upper() == 'BJ'
-                sina_symbols.append(f"bj{code}")
+            if symbol.type == Type.INDEX.value:
+                sina_symbols.append(f"s_{symbol.market.lower()}{symbol.code}")
+            elif symbol.type == Type.STOCK.value:
+                sina_symbols.append(f"{symbol.market.lower()}{symbol.code}")
+            else:
+                raise Exception(f"Unsupported symbol type: {symbol.type}. Only STOCK and INDEX are supported.")
         
         # 新浪实时行情API：返回JavaScript格式数据
         # 参数：list为股票代码，用逗号分隔
@@ -207,7 +88,7 @@ class MarketDataFetcher:
             # 解析新浪返回的数据格式
             # var hq_str_sh600000="浦发银行,14.170,14.200,13.800,14.240,13.800,13.800,13.810,161683677,2258575044.000,354522,13.800,154900,13.790,393300,13.780,106500,13.770,79700,13.760,1000,13.810,700,13.820,6000,13.830,9700,13.840,52300,13.850,2025-07-11,15:00:03,00,"
             left_part, right_part = line.split('=')
-            if symbols[i].split('.')[0] not in left_part:
+            if symbols[i].code not in left_part:
                 raise Exception(f"Symbol mismatch: {symbols[i]} not found in {left_part}")
 
             fields = right_part.strip('";\n').split(',')
@@ -254,18 +135,18 @@ class MarketDataFetcher:
             )
             quotes.append(quote)
         
-        logging.info(f"Fetched {len(quotes)} realtime quotes for symbols: {', '.join(symbols)}, detail info: {', '.join([f'{q.symbol}: {q.price} ({q.change_percent:.2f}%)' for q in quotes])}")
+        logging.info(f"Fetched {len(quotes)} realtime quotes for symbols: {', '.join([x.code + '.' + x.market for x in symbols])}, detail info: {', '.join([f'{q.symbol}: {q.price} ({q.change_percent:.2f}%)' for q in quotes])}")
 
         csv_dao.write_records(quotes)
         return quotes
 
     @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
-    async def fetch_historical_data(self, symbol: str, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
+    async def fetch_historical_data(self, symbol: Symbol, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
         """
-        从东方财富获取历史行情数据
+        从东方财富获取股票和指数历史行情数据
         
         Args:
-            symbol: 股票代码，如'000001.SZ' 或 '600000.SH'
+            symbol: symbol
             start_date: 开始日期，格式'YYYY-MM-DD'
             end_date: 结束日期，格式'YYYY-MM-DD'
         
@@ -274,13 +155,12 @@ class MarketDataFetcher:
         """
 
         # 转换股票代码格式
-        code, market = symbol.split('.')
-        if market.upper() not in ['SH', 'SZ', 'BJ']:
-            raise Exception(f"Unsupported market type: {market}. Expected 'SH' or 'SZ' or 'BJ'.")
-        if market.upper() == 'SH':
-            secid = f'1.{code}'
-        else: # market.upper() == 'SZ' or market.upper() == 'BJ'
-            secid = f'0.{code}'
+        if symbol.market == MarketType.SH.value:
+            secid = f'1.{symbol.code}'
+        elif symbol.market in [MarketType.SZ.value, MarketType.BJ.value]:
+            secid = f'0.{symbol.code}'
+        else:
+            raise Exception(f"Unsupported market type: {symbol.market}. Expected 'SH', 'SZ' or 'BJ'.")
         
         # 东方财富历史数据API
         # 参数说明：
@@ -335,7 +215,7 @@ class MarketDataFetcher:
         csv_dao.write_records(historical_data)
         return historical_data
 
-    async def fetch_stock_list(self, csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
+    async def fetch_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富新版 push2delay 接口获取股票列表
         
@@ -345,15 +225,12 @@ class MarketDataFetcher:
         all_stocks: List[StockInfo] = []
         page_size = 100
 
-        # 默认 fs 参数：全部市场
-        sh_a = 'm:1+t:2,m:1+t:23'
-        sz_a = 'm:0+t:6,m:0+t:80'
-        bj_a = 'm:0+t:81+s:2048'
-        markets = {
-            'SH': sh_a,
-            'SZ': sz_a,
-            'BJ': bj_a,
-        }
+
+        markets = {}
+        for market_name in market_names:
+            if market_name not in MARKET_STOCK_LIST_FS:
+                raise Exception(f"Unsupported market name: {market_name}. Supported markets: {', '.join(MARKET_STOCK_LIST_FS.keys())}")
+            markets[market_name] = MARKET_STOCK_LIST_FS[market_name]
         
         for market, fs in markets.items():
             page = 1
@@ -391,9 +268,12 @@ class MarketDataFetcher:
                         code = rec.get('f12', '')
                         name = rec.get('f14', '')
                         page_stocks.append(StockInfo(
-                            symbol=f"{code}.{market}",
+                            symbol=Symbol(
+                                code=code,
+                                market=get_exchange(code),
+                                type=Type.STOCK.value,
+                            ),
                             name=name,
-                            market=market,
                         ))
 
                     all_stocks.extend(page_stocks)
@@ -410,7 +290,7 @@ class MarketDataFetcher:
         csv_dao.write_records(all_stocks)
         return all_stocks
 
-    async def fetch_financial_data(self, symbol: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
+    async def fetch_financial_data(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
         """
         从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         
@@ -441,7 +321,7 @@ class MarketDataFetcher:
                     params = {
                         "type": table_type,
                         "sty": sty,
-                        "filter": f'(SECUCODE="{symbol}")',
+                        "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
                         "p": page,
                         "ps": page_size,
                         "sr": -1,
@@ -544,46 +424,3 @@ class MarketDataFetcher:
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
         """将数据对象转换为字典格式，便于持久化存储"""
         return [asdict(obj) for obj in data_objects]
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-    # 示例用法
-    async def main():
-        rate_limiter_mgr = RateLimiterManager()
-        rate_limiter_mgr.add_rate_limiter('hq.sinajs.cn', RateLimiter(max_concurrent=5, min_interval=1, max_requests_per_minute=60)) # 秒级tick
-        rate_limiter_mgr.add_rate_limiter('*.eastmoney.com', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=15))
-        
-        with ExitStack() as stack:
-            async with AsyncExitStack() as async_stack:
-                spider = await async_stack.enter_async_context(AntiDetectionSpider())
-                fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
-
-                # 创建定时器函数，运行指定时间后返回False
-                def create_timer_check_func(duration_seconds: int):
-                    start_time = time.time()
-                    def check_func():
-                        return time.time() - start_time < duration_seconds
-                    return check_func
-
-                os.remove('realtime_quotes.csv') if os.path.exists('realtime_quotes.csv') else None
-                os.remove('historical_data.csv') if os.path.exists('historical_data.csv') else None
-                os.remove('stock_list.csv') if os.path.exists('stock_list.csv') else None
-                os.remove('financial_data.csv') if os.path.exists('financial_data.csv') else None
-                os.remove('dividend_data.csv') if os.path.exists('dividend_data.csv') else None
-
-                realtime_quote_csv_dao = stack.enter_context(CSVGenericDAO('realtime_quotes.csv', RealTimeQuote))
-                historical_data_csv_dao = stack.enter_context(CSVGenericDAO('historical_data.csv', HistoricalData))
-                stock_info_csv_dao = stack.enter_context(CSVGenericDAO('stock_list.csv', StockInfo))
-                financial_data_csv_dao = stack.enter_context(CSVGenericDAO('financial_data.csv', FinancialData))
-
-                tasks = [
-                    async_call_loop(fetcher.fetch_realtime_quotes, ['000001', '000002'], realtime_quote_csv_dao, interval=1.0, check_func=create_timer_check_func(30), ignore_exceptions=True),  # 运行30秒
-                    #fetcher.fetch_historical_data('000001', '2025-01-01', '2025-07-13', historical_data_csv_dao, klt='101', fqt='0'),
-                    #fetcher.fetch_stock_list(stock_info_csv_dao, 'all'),
-                    #fetcher.fetch_financial_data('000001', 'SZ', financial_data_csv_dao),
-                ]
-                await asyncio.gather(*tasks)
-
-    # 运行异步函数
-    asyncio.run(main())
