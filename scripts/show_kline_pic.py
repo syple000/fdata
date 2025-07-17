@@ -12,6 +12,7 @@ if __name__ == '__main__':
     parser.add_argument('--date_range', type=str, default='', help='Date range for the K-line chart')
     parser.add_argument('--kline_type', type=str, default='daily', help='K-line type (e.g., daily, weekly, monthly)')
     parser.add_argument('--adjust_type', type=str, default='forward', help='Adjust type for historical data')
+    parser.add_argument('--latest_days', type=int, default=365, help='Number of latest days to show in the K-line chart')
 
     args = parser.parse_args()
 
@@ -77,8 +78,8 @@ if __name__ == '__main__':
     # Convert 'Date' column to datetime
     df['Date'] = pd.to_datetime(df['Date'])
 
-    # 过滤最近的365条数据
-    df = df.sort_values(by='Date').tail(365)
+    # 过滤最近的n条数据
+    df = df.sort_values(by='Date').tail(args.latest_days)
 
     # Set 'Date' as the index
     df.set_index('Date', inplace=True)
