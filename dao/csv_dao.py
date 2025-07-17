@@ -104,6 +104,8 @@ class CSVGenericDAO(Generic[T]):
         if value is None:
             return ''
         elif is_dataclass(value):
+            if hasattr(value, 'to_string') and callable(value.to_string) and hasattr(value, "from_string") and callable(value.from_string):
+                return value.to_string()
             # 将dataclass转换为字典然后序列化
             return json.dumps(self._dataclass_to_dict(value), ensure_ascii=False)
         elif isinstance(value, (list, dict)):
@@ -126,6 +128,8 @@ class CSVGenericDAO(Generic[T]):
     def _serialize_nested(self, value: Any) -> Any:
         """递归序列化嵌套结构"""
         if is_dataclass(value):
+            if hasattr(value, 'to_string') and callable(value.to_string) and hasattr(value, "from_string") and callable(value.from_string):
+                return value.to_string()
             return self._dataclass_to_dict(value)
         elif isinstance(value, list):
             return [self._serialize_nested(item) for item in value]
@@ -308,6 +312,8 @@ class CSVGenericDAO(Generic[T]):
         elif target_type == dict or get_origin(target_type) == dict:
             return json.loads(value)
         elif is_dataclass(target_type):
+            if hasattr(target_type, "to_string") and callable(target_type.to_string) and hasattr(target_type, 'from_string') and callable(target_type.from_string):
+                return target_type.from_string(value)
             # 处理嵌套的dataclass
             data = json.loads(value)
             return self._dict_to_dataclass(data, target_type)
@@ -340,6 +346,8 @@ class CSVGenericDAO(Generic[T]):
     def _deserialize_nested(self, value: Any, target_type: Type) -> Any:
         """递归反序列化嵌套结构"""
         if is_dataclass(target_type):
+            if hasattr(target_type, "to_string") and callable(target_type.to_string) and hasattr(target_type, 'from_string') and callable(target_type.from_string):
+                return target_type.from_string(value)
             return self._dict_to_dataclass(value, target_type)
         elif get_origin(target_type) == list and get_args(target_type):
             element_type = get_args(target_type)[0]
@@ -384,6 +392,18 @@ class Address:
 class Contact:
     email: str
     phone: str
+
+    @staticmethod
+    def from_string(contact_str: str) -> 'Contact':
+        """从字符串创建Contact对象"""
+        parts = contact_str.split(',')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid contact format: {contact_str}.")
+        return Contact(email=parts[0].strip(), phone=parts[1].strip())
+
+    def to_string(self) -> str:
+        """将Contact对象转换为字符串格式"""
+        return f"{self.email}, {self.phone}" if self.email and self.phone else ''
 
 @dataclass
 class Person:
