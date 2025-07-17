@@ -2,14 +2,14 @@ import mmap
 import os
 import csv
 import io
-from typing import List, Optional, Any, Type, TypeVar, Generic, get_type_hints
-from dataclasses import dataclass, fields
+from typing import List, Optional, Any, Type, TypeVar, Generic, get_type_hints, get_origin, get_args
+from dataclasses import dataclass, fields, is_dataclass
 import json
 
 T = TypeVar('T')
 
 class CSVGenericDAO(Generic[T]):
-    """基于mmap的泛型CSV数据存储和读取"""
+    """基于mmap的泛型CSV数据存储和读取，支持嵌套dataclass"""
     
     def __init__(self, filepath: str, model_class: Type[T]):
         """
@@ -99,6 +99,41 @@ class CSVGenericDAO(Generic[T]):
         except UnicodeDecodeError:
             return None
     
+    def _serialize_value(self, value: Any) -> str:
+        """序列化值，支持嵌套dataclass"""
+        if value is None:
+            return ''
+        elif is_dataclass(value):
+            # 将dataclass转换为字典然后序列化
+            return json.dumps(self._dataclass_to_dict(value), ensure_ascii=False)
+        elif isinstance(value, (list, dict)):
+            # 递归处理列表和字典中的dataclass
+            return json.dumps(self._serialize_nested(value), ensure_ascii=False)
+        else:
+            return str(value)
+    
+    def _dataclass_to_dict(self, obj: Any) -> dict:
+        """将dataclass转换为字典"""
+        if not is_dataclass(obj):
+            return obj
+        
+        result = {}
+        for field in fields(obj):
+            value = getattr(obj, field.name)
+            result[field.name] = self._serialize_nested(value)
+        return result
+    
+    def _serialize_nested(self, value: Any) -> Any:
+        """递归序列化嵌套结构"""
+        if is_dataclass(value):
+            return self._dataclass_to_dict(value)
+        elif isinstance(value, list):
+            return [self._serialize_nested(item) for item in value]
+        elif isinstance(value, dict):
+            return {k: self._serialize_nested(v) for k, v in value.items()}
+        else:
+            return value
+    
     def write_record(self, record: T) -> None:
         """
         写入单条记录
@@ -113,11 +148,7 @@ class CSVGenericDAO(Generic[T]):
         row_data = []
         for field in fields(self.model_class):
             value = getattr(record, field.name)
-            # 处理复杂类型，转换为字符串
-            if isinstance(value, (list, dict)):
-                row_data.append(json.dumps(value, ensure_ascii=False))
-            else:
-                row_data.append(str(value) if value is not None else '')
+            row_data.append(self._serialize_value(value))
         
         self._write_row(row_data)
     
@@ -161,9 +192,6 @@ class CSVGenericDAO(Generic[T]):
         self._mmap.seek(self._write_offset)
         self._mmap.write(data)
         self._write_offset += len(data)
-        
-        # 确保数据同步到磁盘
-        # self._mmap.flush()
     
     def read_record(self) -> Optional[T]:
         """
@@ -261,7 +289,7 @@ class CSVGenericDAO(Generic[T]):
         return self.model_class(**field_values)
     
     def _convert_value(self, value: str, target_type: Type) -> Any:
-        """值类型转换"""
+        """值类型转换，支持嵌套dataclass"""
         if target_type == str:
             return value
         elif target_type == int:
@@ -270,16 +298,57 @@ class CSVGenericDAO(Generic[T]):
             return float(value)
         elif target_type == bool:
             return value.lower() in ('true', '1', 'yes', 'on')
-        elif target_type == list:
+        elif target_type == list or get_origin(target_type) == list:
+            data = json.loads(value)
+            # 检查是否需要转换列表元素
+            if get_args(target_type):
+                element_type = get_args(target_type)[0]
+                return [self._deserialize_nested(item, element_type) for item in data]
+            return data
+        elif target_type == dict or get_origin(target_type) == dict:
             return json.loads(value)
-        elif target_type == dict:
-            return json.loads(value)
+        elif is_dataclass(target_type):
+            # 处理嵌套的dataclass
+            data = json.loads(value)
+            return self._dict_to_dataclass(data, target_type)
         else:
             # 尝试直接构造
             try:
                 return target_type(value)
             except:
                 return value
+    
+    def _dict_to_dataclass(self, data: dict, target_class: Type) -> Any:
+        """将字典转换为dataclass对象"""
+        if not is_dataclass(target_class):
+            return data
+        
+        # 获取目标类的类型提示
+        type_hints = get_type_hints(target_class)
+        
+        # 构建参数字典
+        kwargs = {}
+        for field in fields(target_class):
+            field_name = field.name
+            if field_name in data:
+                field_type = type_hints.get(field_name, str)
+                value = data[field_name]
+                kwargs[field_name] = self._deserialize_nested(value, field_type)
+        
+        return target_class(**kwargs)
+    
+    def _deserialize_nested(self, value: Any, target_type: Type) -> Any:
+        """递归反序列化嵌套结构"""
+        if is_dataclass(target_type):
+            return self._dict_to_dataclass(value, target_type)
+        elif get_origin(target_type) == list and get_args(target_type):
+            element_type = get_args(target_type)[0]
+            return [self._deserialize_nested(item, element_type) for item in value]
+        elif isinstance(value, dict) and hasattr(target_type, '__annotations__'):
+            # 处理嵌套字典
+            return {k: self._deserialize_nested(v, str) for k, v in value.items()}
+        else:
+            return value
     
     def reset_read_offset(self) -> None:
         """重置读取偏移量到头部后"""
@@ -304,15 +373,25 @@ class CSVGenericDAO(Generic[T]):
         self.close()
 
 
+# 使用示例 - 嵌套dataclass
+@dataclass
+class Address:
+    street: str
+    city: str
+    zip_code: str
 
-# 使用示例
+@dataclass
+class Contact:
+    email: str
+    phone: str
+
 @dataclass
 class Person:
     name: str
     age: int
-    city: str
+    address: Address
+    contact: Contact
     hobbies: List[str]
-
 
 @dataclass
 class Product:
@@ -321,23 +400,22 @@ class Product:
     price: float
     in_stock: bool
 
-
 if __name__ == "__main__":
     os.remove('/tmp/people.csv') if os.path.exists('/tmp/people.csv') else None
     os.remove('/tmp/products.csv') if os.path.exists('/tmp/products.csv') else None
 
-    # 使用Person模型
+    # 使用嵌套dataclass
     with CSVGenericDAO('/tmp/people.csv', Person) as dao:
-        # 写入单条记录
-        person1 = Person(name="Alice", age=25, city="New York", hobbies=["reading", "swimming"])
-        dao.write_record(person1)
+        # 创建嵌套对象
+        address1 = Address(street="123 Main St", city="New York", zip_code="10001")
+        contact1 = Contact(email="alice@example.com", phone="123-456-7890")
+        person1 = Person(name="Alice", age=25, address=address1, contact=contact1, hobbies=["reading", "swimming"])
         
-        # 写入多条记录
-        people = [
-            Person(name="Bob", age=30, city="London", hobbies=["coding", "gaming"]),
-            Person(name="Charlie", age=35, city="Paris", hobbies=["cooking", "traveling"])
-        ]
-        dao.write_records(people)
+        address2 = Address(street="456 Oak Ave", city="London", zip_code="SW1A 1AA")
+        contact2 = Contact(email="bob@example.com", phone="987-654-3210")
+        person2 = Person(name="Bob", age=30, address=address2, contact=contact2, hobbies=["coding", "gaming"])
+        
+        dao.write_records([person1, person2])
         
         # 重置读取偏移量
         dao.reset_read_offset()
@@ -345,35 +423,9 @@ if __name__ == "__main__":
         # 读取所有记录
         all_people = dao.read_records()
         for person in all_people:
-            print(f"{person.name}, {person.age}, {person.city}, {person.hobbies}")
-    
-    with CSVGenericDAO('/tmp/people.csv', Person) as dao:
-        # 读取单条记录
-        while True:
-            person = dao.read_record()
-            if person is None:
-                break
-            print(f"Person: {person.name}, Age: {person.age}, City: {person.city}, Hobbies: {person.hobbies}")
-    
-    # 使用Product模型
-    with CSVGenericDAO('/tmp/products.csv', Product) as dao:
-        products = [
-            Product(id=1, name="Laptop", price=999.99, in_stock=True),
-            Product(id=2, name="Mouse", price=29.99, in_stock=False)
-        ]
-        dao.write_records(products)
-        
-        dao.reset_read_offset()
-        
-        # 读取单条记录
-        while True:
-            product = dao.read_record()
-            if product is None:
-                break
-            print(f"Product: {product.name}, Price: ${product.price}, In Stock: {product.in_stock}")
-    
-    with CSVGenericDAO('/tmp/products.csv', Product) as dao:
-        # 读取所有记录
-        all_products = dao.read_records()
-        for product in all_products:
-            print(f"{product.id}, {product.name}, ${product.price}, In Stock: {product.in_stock}")
+            print(f"Name: {person.name}")
+            print(f"Age: {person.age}")
+            print(f"Address: {person.address.street}, {person.address.city}, {person.address.zip_code}")
+            print(f"Contact: {person.contact.email}, {person.contact.phone}")
+            print(f"Hobbies: {person.hobbies}")
+            print("---")
