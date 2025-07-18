@@ -250,6 +250,158 @@ class MarketDataFetcher:
         csv_dao.write_records(historical_data)
         return historical_data
 
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+    async def fetch_stock_quote(self, symbol: Symbol, csv_dao: CSVGenericDAO[StockQuoteInfo]) -> StockQuoteInfo:
+        """
+        从东方财富获取股票详细quote信息
+        
+        Returns:
+            股票quote信息
+        """
+        
+        # 转换股票代码格式
+        if symbol.market == MarketType.SH.value:
+            secid = f'1.{symbol.code}'
+        elif symbol.market in [MarketType.SZ.value, MarketType.BJ.value]:
+            secid = f'0.{symbol.code}'
+        else:
+            raise Exception(f"Unsupported market type: {symbol.market}. Expected 'SH', 'SZ' or 'BJ'.")
+        
+        params = {
+            'invt': '2',
+            'fltt': '1',
+            'fields': 'f58,f734,f107,f57,f43,f59,f169,f301,f60,f170,f152,f177,f111,f46,f44,f45,f47,f260,f48,f261,f279,f277,f278,f288,f19,f17,f531,f15,f13,f11,f20,f18,f16,f14,f12,f39,f37,f35,f33,f31,f40,f38,f36,f34,f32,f211,f212,f213,f214,f215,f210,f209,f208,f207,f206,f161,f49,f171,f50,f86,f84,f85,f168,f108,f116,f167,f164,f162,f163,f92,f71,f117,f292,f51,f52,f191,f192,f262,f294,f295,f269,f270,f256,f257,f285,f286,f748,f747',
+            'secid': secid
+        }
+        
+        url = f"https://push2delay.eastmoney.com/api/qt/stock/get?{urlencode(params)}"
+        logging.info(f"Fetching stock quote for {symbol}, URL: {url}")
+        
+        async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
+            response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+        
+        if not response or not response.success:
+            raise Exception(f"Failed to fetch stock quote for {symbol}: {response.error if response else 'No response'}")
+
+        payload = json.loads(extract_content(response.content, "html > body > pre"))
+        
+        if payload['rc'] != 0 or not payload['data']:
+            raise Exception(f"Invalid response for stock quote {symbol}: {payload}")
+        
+        data = payload['data']
+        
+        quote_info = StockQuoteInfo(
+            symbol=symbol,
+            name=data.get('f58', ''),                    # 股票名称
+            open_price=data.get('f46', 0) / 100.0,       # 今开
+            prev_close=data.get('f60', 0) / 100.0,       # 昨收
+            high_price=data.get('f44', 0) / 100.0,       # 最高
+            low_price=data.get('f45', 0) / 100.0,        # 最低
+            limit_up=data.get('f51', 0) / 100.0,         # 涨停
+            limit_down=data.get('f52', 0) / 100.0,       # 跌停
+            turnover_rate=data.get('f168', 0) / 100.0,   # 换手率
+            volume_ratio=data.get('f50', 0) / 100.0,     # 量比
+            volume=data.get('f47', 0),                   # 成交量
+            turnover=data.get('f48', 0),                 # 成交额
+            pe_dynamic=data.get('f162', 0) / 100.0,      # 市盈率(动)
+            pe_lyr=data.get('f163', 0) / 100.0,        # 市盈率(静态)
+            pe_ttm=data.get('f164', 0) / 100.0,        # 市盈率(TTM)
+            pb_ratio=data.get('f167', 0) / 100.0,        # 市净率
+            total_market_cap=data.get('f116', 0),      # 总市值
+            circulating_market_cap=data.get('f117', 0) # 流通市值
+        )
+        
+        logging.info(f"Fetched stock quote for {symbol}: {quote_info.name}, open: {quote_info.open_price}, high: {quote_info.high_price}, low: {quote_info.low_price}")
+        
+        csv_dao.write_records([quote_info])
+        return quote_info
+
+    async def fetch_dividend_info(self, symbol: Symbol, csv_dao: CSVGenericDAO[DividendInfo]) -> List[DividendInfo]:
+        """
+        从东方财富获取股票除权除息分红配股信息
+        
+        API接口示例：
+        https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=PLAN_NOTICE_DATE&sortTypes=-1&pageSize=50&pageNumber=1&reportName=RPT_SHAREBONUS_DET&columns=ALL&quoteColumns=&source=WEB&client=WEB
+        
+        Returns:
+            除权除息分红配股信息列表
+        """
+        all_dividends: List[DividendInfo] = []
+        page_size = 100
+        page = 1
+        
+        while True:
+            @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+            async def _fetch_dividend_info():
+                params = {
+                    "sortColumns": "PLAN_NOTICE_DATE",
+                    "sortTypes": "-1",
+                    "pageSize": str(page_size),
+                    "pageNumber": str(page),
+                    "reportName": "RPT_SHAREBONUS_DET",
+                    "columns": "ALL",
+                    "quoteColumns": "",
+                    "source": "WEB",
+                    "client": "WEB",
+                    "filter": f'(SECURITY_CODE="{symbol.code}")' if symbol else '',
+                }
+                
+                url = f"https://datacenter-web.eastmoney.com/api/data/v1/get?{urlencode(params)}"
+                async with self.rate_limiter_mgr.get_rate_limiter("datacenter-web.eastmoney.com"):
+                    response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+                
+                if not response or not response.success:
+                    raise Exception(f"Failed to fetch dividend info: {response.error if response else 'No response'}")
+
+                payload = json.loads(extract_content(response.content, "html > body > pre"))
+                if not payload.get('result') or not payload['result'].get('data'):
+                    return False
+                
+                data_list = payload['result']['data']
+                if not data_list:
+                    return False
+                
+                page_dividends: List[DividendInfo] = []
+                for item in data_list:
+                    dividend_info = DividendInfo(
+                        symbol=Symbol.from_string(item.get('SECUCODE', '')),
+                        name=item.get('SECURITY_NAME_ABBR', ''),
+                        eps=float(item.get('BASIC_EPS') or 0),
+                        bvps=float(item.get('BVPS') or 0),
+                        per_capital_reserve=float(item.get('PER_CAPITAL_RESERVE') or 0),
+                        per_unassign_profit=float(item.get('PER_UNASSIGN_PROFIT') or 0),
+                        net_profit_yoy_growth=float(item.get('PNP_YOY_RATIO') or 0),
+                        total_shares=float(item.get('TOTAL_SHARES') or 0),
+                        plan_notice_date=item.get('PLAN_NOTICE_DATE', '').split(' ')[0],
+                        equity_record_date=item.get('EQUITY_RECORD_DATE', '').split(' ')[0] if item.get('EQUITY_RECORD_DATE') else '',
+                        ex_dividend_date=item.get('EX_DIVIDEND_DATE', '').split(' ')[0] if item.get('EX_DIVIDEND_DATE') else '',
+                        progress=item.get('ASSIGN_PROGRESS', ''),
+                        latest_notice_date=item.get('NOTICE_DATE', '').split(' ')[0],
+                        total_transfer_ratio=float(item.get('BONUS_IT_RATIO') or 0),
+                        bonus_ratio=float(item.get('BONUS_RATIO') or 0),
+                        transfer_ratio=float(item.get('IT_RATIO') or 0),
+                        cash_dividend_ratio=float(item.get('PRETAX_BONUS_RMB') or 0),
+                        dividend_yield=float(item.get('DIVIDENT_RATIO') or 0) * 100,  # 转换为百分比
+                    )
+                    page_dividends.append(dividend_info)
+                
+                all_dividends.extend(page_dividends)
+                
+                # 检查是否还有更多数据
+                if len(page_dividends) < page_size:
+                    return False
+
+                return True
+            
+            continue_fetch = await _fetch_dividend_info()
+            if not continue_fetch:
+                break
+            page += 1
+        
+        logging.info(f"Fetched {len(all_dividends)} dividend info records")
+        csv_dao.write_records(all_dividends)
+        return all_dividends
+
     async def fetch_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富新版 push2delay 接口获取股票列表

@@ -10,7 +10,7 @@ from datetime import datetime
 from fdata.dao.csv_dao import CSVGenericDAO
 from fdata.market_data.market_data_fetcher import MarketDataFetcher, RealTimeQuote, RateLimiterManager, RateLimiter
 from fdata.market_data.market_data_fetcher import KLineType, AdjustType
-from fdata.market_data.market_data_fetcher import HistoricalData, Symbol, FinancialData, StockInfo
+from fdata.market_data.market_data_fetcher import HistoricalData, Symbol, FinancialData, StockInfo, StockQuoteInfo, DividendInfo
 from fdata.spider.spider_core import AntiDetectionSpider
 
 class MarketDataDumper:
@@ -39,6 +39,17 @@ class MarketDataDumper:
         for symbol in symbols:
             await self.fetcher.fetch_financial_data(symbol, csv_dao)
 
+    # 股票详情quote
+    async def dump_stock_quote(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[StockQuoteInfo]):
+        for symbol in symbols:
+            await self.fetcher.fetch_stock_quote(symbol, csv_dao)
+
+    # 除权除息分红配股数据
+    async def dump_dividend_info(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[DividendInfo]):
+        for symbol in symbols:
+            await self.fetcher.fetch_dividend_info(symbol, csv_dao)
+
+
 def chunk_symbols(symbols: List[Symbol], batch_size: int) -> List[List[Symbol]]:
     """将股票符号列表分割成指定大小的批次"""
     return [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
@@ -47,7 +58,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('functions', help='Function to execute: stock_list,realtime,historical,financial')
+    parser.add_argument('functions', help='Function to execute: stock_list,realtime,historical,financial,stock_quote,dividend_info')
 
     parser.add_argument('--directory', default='output', help='Directory to save CSV files')
     
@@ -162,6 +173,25 @@ if __name__ == "__main__":
                         os.remove(os.path.join(csv_path, 'financial_data.csv'))
                     with CSVGenericDAO(os.path.join(csv_path, 'financial_data.csv'), FinancialData) as financial_data_csv_dao:
                         await dumper.dump_financial_data(symbols, financial_data_csv_dao)
+                elif function == 'stock_quote':
+                    if not symbols:
+                        raise ValueError("Symbols must be provided for stock quote data")
+
+                    csv_path = os.path.join(args.directory, 'stock_quote', args.today_date, str(batch_num))
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'stock_quote.csv')):
+                        os.remove(os.path.join(csv_path, 'stock_quote.csv'))
+                    with CSVGenericDAO(os.path.join(csv_path, 'stock_quote.csv'), StockQuoteInfo) as stock_quote_csv_dao:
+                        await dumper.dump_stock_quote(symbols, stock_quote_csv_dao)
+                elif function == 'dividend_info':
+                    csv_path = os.path.join(args.directory, 'dividend_info', args.today_date, str(batch_num))
+                    if not os.path.exists(csv_path):
+                        os.makedirs(csv_path)
+                    if os.path.exists(os.path.join(csv_path, 'dividend_info.csv')):
+                        os.remove(os.path.join(csv_path, 'dividend_info.csv'))
+                    with CSVGenericDAO(os.path.join(csv_path, 'dividend_info.csv'), DividendInfo) as dividend_info_csv_dao:
+                        await dumper.dump_dividend_info(symbols, dividend_info_csv_dao)
                 else:
                     raise ValueError(f"Invalid function: {function}")
             
@@ -169,7 +199,7 @@ if __name__ == "__main__":
             functions = args.functions.split(',')
             for function in functions:
                 function = function.strip()
-                if function not in ['stock_list', 'realtime', 'historical', 'financial']:
+                if function not in ['stock_list', 'realtime', 'historical', 'financial', 'stock_quote', 'dividend_info']:
                     raise ValueError(f"Invalid function: {function}")
                 for index, symbols in enumerate(symbol_chunks):
                     tasks.append(asyncio.create_task(execute_function(function, symbols, index)))

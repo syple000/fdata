@@ -149,6 +149,55 @@ class FinancialData:
     net_finance_cashflow: float      # 筹资活动产生的现金流量净额（NET_CASH_FINA_ACT）
     free_cashflow: float             # 自由现金流（FREE_CASH_FLOW）
 
+@dataclass
+class StockQuoteInfo:
+    symbol: Symbol
+    name: str
+    
+    # 价格信息
+    open_price: float        # 今开
+    prev_close: float        # 昨收
+    high_price: float        # 最高
+    low_price: float         # 最低
+    limit_up: float          # 涨停
+    limit_down: float        # 跌停
+    
+    # 交易信息
+    turnover_rate: float     # 换手率 (%)
+    volume_ratio: float      # 量比
+    volume: int              # 成交量
+    turnover: float          # 成交额
+    
+    # 估值信息
+    pe_dynamic: float        # 市盈率(动态)
+    pe_ttm: float            # 市盈率(TTM)
+    pe_lyr: float            # 市盈率(静态)
+    pb_ratio: float          # 市净率
+    total_market_cap: float  # 总市值
+    circulating_market_cap: float  # 流通市值
+
+@dataclass
+class DividendInfo:
+    """分红配股数据结构"""
+    symbol: Symbol                    # 股票代码
+    name: str                        # 股票名称
+    eps: float                       # 每股收益(元)
+    bvps: float                      # 每股净资产(元)
+    per_capital_reserve: float       # 每股公积金(元)
+    per_unassign_profit: float       # 每股未分配利润(元)
+    net_profit_yoy_growth: float     # 净利润同比增长(%)
+    total_shares: float              # 总股本(亿)
+    plan_notice_date: str            # 预案公告日
+    equity_record_date: str          # 股权登记日
+    ex_dividend_date: str            # 除权除息日
+    progress: str                    # 方案进度
+    latest_notice_date: str          # 最新公告日期
+    total_transfer_ratio: float      # 送转总比例
+    bonus_ratio: float               # 送股比例
+    transfer_ratio: float            # 转股比例
+    cash_dividend_ratio: float       # 现金分红比例
+    dividend_yield: float            # 股息率(%)
+
 # 传入股票code，返回对应的交易所
 def get_exchange(code: str) -> str:
     if code.startswith('6'):
