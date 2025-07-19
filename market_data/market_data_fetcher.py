@@ -1,16 +1,12 @@
-import asyncio
 import json
 import time
 from typing import Dict, List, Any
 from dataclasses import asdict
 from urllib.parse import urlencode
 import logging
-import os
-from contextlib import ExitStack, AsyncExitStack
-from ..spider.rate_limiter import RateLimiter, RateLimiterManager
+from ..spider.rate_limiter import RateLimiterManager
 from ..spider.spider_core import AntiDetectionSpider
 from ..utils.retry import async_retry
-from ..utils.call_loop import async_call_loop
 from ..utils.parse_html_elem import extract_content
 from ..dao.csv_dao import CSVGenericDAO
 from .models import *
@@ -46,9 +42,17 @@ class MarketDataFetcher:
             "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"",
             "sec-ch-ua-mobile": "?0"
         }
+    
+    async def fetch_realtime_quotes(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote], from_: str = 'sina') -> List[RealTimeQuote]:
+        if from_ == 'sina':
+            return await self._fetch_realtime_quotes_sina(symbols, csv_dao)
+        elif from_ == 'eastmoney':
+            raise NotImplementedError("Eastmoney real-time quotes fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'sina' and 'eastmoney'.")
 
     @async_retry(max_retries=1, delay=0, ignore_exceptions=True)
-    async def fetch_realtime_quotes(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
+    async def _fetch_realtime_quotes_sina(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote]) -> List[RealTimeQuote]:
         """
         从新浪财经获取实时行情，支持股票和指数
         
@@ -175,8 +179,124 @@ class MarketDataFetcher:
         csv_dao.write_records(quotes)
         return quotes
 
+    async def fetch_historical_data(self, symbol: Symbol, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE, from_: str='eastmoney') -> List[HistoricalData]:
+        if from_ == 'eastmoney':
+            return await self._fetch_historical_data_em(symbol, start_date, end_date, csv_dao, klt, fqt)
+        elif from_ == 'sina': # 仅支持分钟线未复权数据
+            return await self._fetch_historical_data_sina(symbol, csv_dao, klt)
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
     @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
-    async def fetch_historical_data(self, symbol: Symbol, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
+    async def _fetch_historical_data_sina(self, symbol: Symbol, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType) -> List[HistoricalData]:
+        """
+        从新浪获取股票和指数历史行情数据（5/15/30/60 min数据，未复权）
+        
+        Args:
+            symbol: symbol
+            klt: K线类型
+        
+        Returns:
+            未复权历史分钟行情数据列表
+        """
+        
+        # 转换symbol格式
+        if symbol.type == Type.INDEX.value:
+            sina_symbol = f"{symbol.market.lower()}{symbol.code}"
+        elif symbol.type == Type.STOCK.value:
+            sina_symbol = f"{symbol.market.lower()}{symbol.code}"
+        else:
+            raise Exception(f"Unsupported symbol type: {symbol.type}. Only STOCK and INDEX are supported.")
+        
+        # K线类型映射
+        scale_map = {
+            KLineType.MIN5: '5',
+            KLineType.MIN15: '15', 
+            KLineType.MIN30: '30',
+            KLineType.MIN60: '60',
+        }
+        if klt not in scale_map:
+            raise Exception(f"Unsupported KLineType: {klt}. Supported types are: {', '.join(scale_map.keys())}")
+        
+        scale = scale_map.get(klt)
+        
+        # 新浪历史数据API
+        params = {
+            'symbol': sina_symbol,
+            'scale': scale,
+            'ma': 'no',
+            'datalen': '1960'  # 获取最近1960条数据
+        }
+        
+        # 生成随机回调函数名
+        callback_name = f"var _{sina_symbol}_{scale}_{int(time.time() * 1000)}"
+        
+        url = f"https://quotes.sina.cn/cn/api/jsonp_v2.php/{callback_name}=/CN_MarketDataService.getKLineData"
+        full_url = f"{url}?{urlencode(params)}"
+        
+        logging.info(f"Fetching historical data for {symbol} from Sina, URL: {full_url}")
+        
+        async with self.rate_limiter_mgr.get_rate_limiter('quotes.sina.cn'):
+            response = await self.spider.crawl_url(full_url, headers=self.sina_headers)
+        
+        if not response or not response.success:
+            raise Exception(f"Failed to fetch historical data for {symbol}: {response.error if response else 'No response'}")
+
+        content = extract_content(response.content, "html > body > pre")
+        
+        # 解析JSONP格式数据
+        # 格式: var _callback_name=([{...}]);
+        # 跳过首行/*<script>location.href='//sina.com';</script>*/
+        if content.startswith('/*<script>'):
+            content = content.split('*/', 1)[1].strip()
+        # 找到 = 后面的JSON数组部分
+        if '=' not in content:
+            raise Exception(f"Invalid JSONP format: {content[:100]}...")
+        
+        json_part = content.split('=', 1)[1].strip()
+        if json_part.endswith(');'):
+            json_part = json_part[:-2]  # 移除 );
+        elif json_part.endswith(')'):
+            json_part = json_part[:-1]  # 移除 )
+        
+        # 如果以 ( 开头，移除它
+        if json_part.startswith('('):
+            json_part = json_part[1:]
+        
+        data = json.loads(json_part)
+        
+        historical_data = []
+        for item in data:
+            # 数据格式：{"day":"2025-07-18 15:00:00","open":"3535.480","high":"3535.703","low":"3534.483","close":"3534.483","volume":"1455987400","amount":"17764974592.0000"}
+            date_str = item['day'].split(' ')[0]  # 只取日期部分
+            open_price = float(item['open'])
+            high_price = float(item['high'])
+            low_price = float(item['low'])
+            close_price = float(item['close'])
+            volume = int(item['volume'])
+            turnover = 0  # 新浪不提供换手率数据
+            change_percent = 0.0 # 新浪不提供涨跌幅数据
+            
+            historical_data.append(HistoricalData(
+                symbol=symbol,
+                date=date_str,
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                close_price=close_price,
+                volume=volume,
+                turnover=turnover,
+                change_percent=change_percent
+            ))
+        
+        # 按日期排序
+        historical_data.sort(key=lambda x: x.date)
+        
+        csv_dao.write_records(historical_data)
+        return historical_data
+
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+    async def _fetch_historical_data_em(self, symbol: Symbol, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
         """
         从东方财富获取股票和指数历史行情数据
         
@@ -249,9 +369,17 @@ class MarketDataFetcher:
 
         csv_dao.write_records(historical_data)
         return historical_data
+    
+    async def fetch_stock_quote(self, symbol: Symbol, csv_dao: CSVGenericDAO[StockQuoteInfo], from_: str = 'eastmoney') -> StockQuoteInfo:
+        if from_ == 'eastmoney':
+            return await self._fetch_stock_quote_em(symbol, csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina stock quote fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
     @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
-    async def fetch_stock_quote(self, symbol: Symbol, csv_dao: CSVGenericDAO[StockQuoteInfo]) -> StockQuoteInfo:
+    async def _fetch_stock_quote_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[StockQuoteInfo]) -> StockQuoteInfo:
         """
         从东方财富获取股票详细quote信息
         
@@ -316,7 +444,15 @@ class MarketDataFetcher:
         csv_dao.write_records([quote_info])
         return quote_info
 
-    async def fetch_dividend_info(self, symbol: Symbol, csv_dao: CSVGenericDAO[DividendInfo]) -> List[DividendInfo]:
+    async def fetch_dividend_info(self, symbol: Symbol, csv_dao: CSVGenericDAO[DividendInfo], from_: str = 'eastmoney') -> List[DividendInfo]:
+        if from_ == 'eastmoney':
+            return await self._fetch_dividend_info_em(symbol, csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina dividend info fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
+    async def _fetch_dividend_info_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[DividendInfo]) -> List[DividendInfo]:
         """
         从东方财富获取股票除权除息分红配股信息
         
@@ -402,7 +538,15 @@ class MarketDataFetcher:
         csv_dao.write_records(all_dividends)
         return all_dividends
 
-    async def fetch_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
+    async def fetch_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo], from_: str = 'eastmoney') -> List[StockInfo]:
+        if from_ == 'eastmoney':
+            return await self._fetch_stock_list_em(market_names, csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina stock list fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
+    async def _fetch_stock_list_em(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富新版 push2delay 接口获取股票列表
         
@@ -477,7 +621,15 @@ class MarketDataFetcher:
         csv_dao.write_records(all_stocks)
         return all_stocks
 
-    async def fetch_financial_data(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
+    async def fetch_financial_data(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData], from_: str = 'eastmoney') -> List[FinancialData]:
+        if from_ == 'eastmoney':
+            return await self._fetch_financial_data_em(symbol, csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina financial data fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
+    async def _fetch_financial_data_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
         """
         从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         

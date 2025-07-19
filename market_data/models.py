@@ -109,13 +109,13 @@ class RealTimeQuote:
 class HistoricalData:
     """历史行情数据结构"""
     symbol: Symbol
-    date: str
+    date: str # 日期，格式为 'YYYY-MM-DD'，如果是分钟线，格式为 'YYYY-MM-DD HH:MM:SS'
     open_price: float
     high_price: float
     low_price: float
     close_price: float
     volume: int
-    turnover: float
+    turnover: float # 换手率
     change_percent: float
 
 @dataclass

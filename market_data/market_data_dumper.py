@@ -84,6 +84,7 @@ if __name__ == "__main__":
     async def main():
         rate_limiter_mgr = RateLimiterManager()
         rate_limiter_mgr.add_rate_limiter('hq.sinajs.cn', RateLimiter(max_concurrent=1, min_interval=1, max_requests_per_minute=60)) # 秒级tick
+        rate_limiter_mgr.add_rate_limiter('quotes.sina.cn', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=20))
         rate_limiter_mgr.add_rate_limiter('*.eastmoney.com', RateLimiter(max_concurrent=1, min_interval=5, max_requests_per_minute=20)) # 获取离线数据，5s间隔
         
         async with AsyncExitStack() as async_stack:
