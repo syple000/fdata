@@ -115,7 +115,7 @@ class HistoricalData:
     low_price: float
     close_price: float
     volume: int
-    turnover: float # 换手率
+    turnover: float
     change_percent: float
 
 @dataclass

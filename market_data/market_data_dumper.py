@@ -32,7 +32,10 @@ class MarketDataDumper:
     # 历史行情数据
     async def dump_historical_data(self, symbols: List[Symbol], start_date: str, end_date: str, csv_dao: CSVGenericDAO[RealTimeQuote], kline_type: KLineType, adjust_type: AdjustType):
         for symbol in symbols:
-            await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao, kline_type, adjust_type)
+            if kline_type in [KLineType.MIN5, KLineType.MIN15, KLineType.MIN30, KLineType.MIN60] and adjust_type == AdjustType.NONE:
+                await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao, kline_type, adjust_type, from_='sina')
+            else:
+                await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao, kline_type, adjust_type)
 
     # 历史财务数据
     async def dump_financial_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[HistoricalData]):

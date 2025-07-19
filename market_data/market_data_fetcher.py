@@ -268,13 +268,13 @@ class MarketDataFetcher:
         historical_data = []
         for item in data:
             # 数据格式：{"day":"2025-07-18 15:00:00","open":"3535.480","high":"3535.703","low":"3534.483","close":"3534.483","volume":"1455987400","amount":"17764974592.0000"}
-            date_str = item['day'].split(' ')[0]  # 只取日期部分
+            date_str = item['day']
             open_price = float(item['open'])
             high_price = float(item['high'])
             low_price = float(item['low'])
             close_price = float(item['close'])
-            volume = int(item['volume'])
-            turnover = 0  # 新浪不提供换手率数据
+            volume = int(int(item['volume'])/100)
+            turnover = 0  # 新浪不提供成交数据
             change_percent = 0.0 # 新浪不提供涨跌幅数据
             
             historical_data.append(HistoricalData(
