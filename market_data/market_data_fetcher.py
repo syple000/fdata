@@ -630,20 +630,15 @@ class MarketDataFetcher:
         从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         
         API接口示例：
-        - 资产负债表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GBALANCE&sty=F10_FINANCE_GBALANCE&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        - 利润表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GINCOME&sty=APP_F10_GINCOME&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        - 现金流量表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_GCASHFLOW&sty=APP_F10_GCASHFLOW&filter=(SECUCODE="300059.SZ")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        
-        主要字段：
-        - 资产负债表: TOTAL_ASSETS, TOTAL_CURRENT_ASSETS, TOTAL_NONCURRENT_ASSETS, TOTAL_LIABILITIES, TOTAL_CURRENT_LIAB, TOTAL_NONCURRENT_LIAB, TOTAL_EQUITY
-        - 利润表: TOTAL_OPERATE_INCOME, OPERATE_COST, OPERATE_PROFIT, TOTAL_PROFIT, PARENT_NETPROFIT, BASIC_EPS
-        - 现金流量表: NETCASH_OPERATE, NETCASH_INVEST, NETCASH_FINANCE, CCE_ADD
+        - 资产负债表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BBALANCE&sty=F10_FINANCE_BBALANCE&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        - 利润表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BINCOME&sty=APP_F10_BINCOME&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
+        - 现金流量表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BCASHFLOW&sty=APP_F10_BCASHFLOW&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
         """
         
         tables = [
-            ("RPT_F10_FINANCE_GBALANCE", "F10_FINANCE_GBALANCE"),   # 资产负债表
-            ("RPT_F10_FINANCE_GINCOME", "APP_F10_GINCOME"),         # 利润表
-            ("RPT_F10_FINANCE_GCASHFLOW", "APP_F10_GCASHFLOW"),     # 现金流量表
+            ("RPT_F10_FINANCE_BBALANCE", "F10_FINANCE_BBALANCE"),   # 资产负债表
+            ("RPT_F10_FINANCE_BINCOME", "APP_F10_BINCOME"),         # 利润表
+            ("RPT_F10_FINANCE_BCASHFLOW", "APP_F10_BCASHFLOW"),     # 现金流量表
         ]
         records: Dict[str, Dict[str, Any]] = {}
         page_size = 50
@@ -685,7 +680,7 @@ class MarketDataFetcher:
                             
                         record = records.setdefault(report_date, {"symbol": symbol, "report_date": report_date})
                         
-                        if table_type == "RPT_F10_FINANCE_GBALANCE":  # 资产负债表
+                        if table_type == "RPT_F10_FINANCE_BBALANCE":  # 资产负债表
                             record["total_assets"] = float(item.get("TOTAL_ASSETS") or 0)
                             record["current_assets"] = float(item.get("TOTAL_CURRENT_ASSETS") or 0)
                             record["non_current_assets"] = float(item.get("TOTAL_NONCURRENT_ASSETS") or 0)
@@ -693,19 +688,20 @@ class MarketDataFetcher:
                             record["current_liabilities"] = float(item.get("TOTAL_CURRENT_LIAB") or 0)
                             record["non_current_liabilities"] = float(item.get("TOTAL_NONCURRENT_LIAB") or 0)
                             record["total_equity"] = float(item.get("TOTAL_EQUITY") or 0)
-                        elif table_type == "RPT_F10_FINANCE_GINCOME":  # 利润表
-                            record["total_revenue"] = float(item.get("TOTAL_OPERATE_INCOME") or 0)
-                            record["operating_cost"] = float(item.get("OPERATE_COST") or 0)
+                        elif table_type == "RPT_F10_FINANCE_BINCOME":  # 利润表
+                            record["total_revenue"] = float(item.get("OPERATE_INCOME") or 0)
+                            record["operating_cost"] = float(item.get("OPERATE_EXPENSE") or 0)
                             record["operating_profit"] = float(item.get("OPERATE_PROFIT") or 0)
                             record["profit_before_tax"] = float(item.get("TOTAL_PROFIT") or 0)
                             record["net_profit"] = float(item.get("PARENT_NETPROFIT") or 0)
                             record["eps"] = float(item.get("BASIC_EPS") or 0)
                             # 毛利 = 营业收入 - 营业成本
                             record["gross_profit"] = record["total_revenue"] - record["operating_cost"]
-                        elif table_type == "RPT_F10_FINANCE_GCASHFLOW":  # 现金流量表
+                        elif table_type == "RPT_F10_FINANCE_BCASHFLOW":  # 现金流量表
                             record["net_operate_cashflow"] = float(item.get("NETCASH_OPERATE") or 0)
                             record["net_invest_cashflow"] = float(item.get("NETCASH_INVEST") or 0)
                             record["net_finance_cashflow"] = float(item.get("NETCASH_FINANCE") or 0)
+                            # 自由现金流 = 经营活动现金流 - 构建长期资产支出
                             record["free_cashflow"] = record["net_operate_cashflow"] - float(item.get('CONSTRUCT_LONG_ASSET') or 0)
                     
                     if len(rows) < page_size:
