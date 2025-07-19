@@ -538,15 +538,15 @@ class MarketDataFetcher:
         csv_dao.write_records(all_dividends)
         return all_dividends
 
-    async def fetch_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo], from_: str = 'eastmoney') -> List[StockInfo]:
+    async def fetch_stock_list(self, market_name: str, csv_dao: CSVGenericDAO[StockInfo], from_: str = 'eastmoney') -> List[StockInfo]:
         if from_ == 'eastmoney':
-            return await self._fetch_stock_list_em(market_names, csv_dao)
+            return await self._fetch_stock_list_em(market_name, csv_dao)
         elif from_ == 'sina':
             raise NotImplementedError("Sina stock list fetching is not implemented yet.")
         else:
             raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
-    async def _fetch_stock_list_em(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
+    async def _fetch_stock_list_em(self, market_name: str, csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富新版 push2delay 接口获取股票列表
         
@@ -557,65 +557,61 @@ class MarketDataFetcher:
         page_size = 100
 
 
-        markets = {}
-        for market_name in market_names:
-            if market_name not in MARKET_STOCK_LIST_FS:
-                raise Exception(f"Unsupported market name: {market_name}. Supported markets: {', '.join(MARKET_STOCK_LIST_FS.keys())}")
-            markets[market_name] = MARKET_STOCK_LIST_FS[market_name]
+        if market_name not in MARKET_STOCK_LIST_FS:
+            raise Exception(f"Unsupported market name: {market_name}. Supported markets: {', '.join(MARKET_STOCK_LIST_FS.keys())}")
         
-        for market, fs in markets.items():
-            page = 1
-            while True:
-                @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
-                async def _fetch_stock_list():
-                    params = {
-                        'np':    '1',
-                        'fltt':  '1',
-                        'invt':  '2',
-                        'fs':    fs,
-                        'fields':'f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23',
-                        'fid':   'f3',
-                        'pn':    str(page),
-                        'pz':    str(page_size),
-                        'po':    '1',
-                        'dect':  '1',
-                    }
-                    url = f"https://push2delay.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
-                    async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
-                        response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+        page = 1
+        while True:
+            @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+            async def _fetch_stock_list():
+                params = {
+                    'np':    '1',
+                    'fltt':  '1',
+                    'invt':  '2',
+                    'fs':    MARKET_STOCK_LIST_FS[market_name],
+                    'fields':'f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23',
+                    'fid':   'f3',
+                    'pn':    str(page),
+                    'pz':    str(page_size),
+                    'po':    '1',
+                    'dect':  '1',
+                }
+                url = f"https://push2delay.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
+                async with self.rate_limiter_mgr.get_rate_limiter('push2delay.eastmoney.com'):
+                    response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
 
-                    if not response or not response.success:
-                        raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
+                if not response or not response.success:
+                    raise Exception(f"Failed to fetch stock list: {response.error if response else 'No response'}")
 
-                    payload = json.loads(extract_content(response.content, "html > body > pre"))
-                    if not payload['data']:
-                        return False
-                    diff = payload['data']['diff']
-                    if not diff:
-                        return False
+                payload = json.loads(extract_content(response.content, "html > body > pre"))
+                if not payload['data']:
+                    return False
+                diff = payload['data']['diff']
+                if not diff:
+                    return False
 
-                    page_stocks: List[StockInfo] = []
-                    for rec in diff:
-                        code = rec.get('f12', '')
-                        name = rec.get('f14', '')
-                        page_stocks.append(StockInfo(
-                            symbol=Symbol(
-                                code=code,
-                                market=get_exchange(code),
-                                type=Type.STOCK.value,
-                            ),
-                            name=name,
-                        ))
+                page_stocks: List[StockInfo] = []
+                for rec in diff:
+                    code = rec.get('f12', '')
+                    name = rec.get('f14', '')
+                    page_stocks.append(StockInfo(
+                        symbol=Symbol(
+                            code=code,
+                            market=get_exchange(code),
+                            type=Type.STOCK.value,
+                        ),
+                        name=name,
+                    ))
 
-                    all_stocks.extend(page_stocks)
-                    if len(page_stocks) < page_size:
-                        return False
-                    
-                    return True
-                continue_fetch = await _fetch_stock_list()
-                if not continue_fetch:
-                    break
-                page += 1
+                all_stocks.extend(page_stocks)
+                if len(page_stocks) < page_size:
+                    return False
+                
+                return True
+            continue_fetch = await _fetch_stock_list()
+            if not continue_fetch:
+                break
+            page += 1
 
         logging.info(f"Fetched {len(all_stocks)} stocks")
         csv_dao.write_records(all_stocks)
