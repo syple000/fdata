@@ -248,7 +248,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Market Data Dumper")
     parser.add_argument('--functions', type=str, required=True, help="Comma-separated list of functions to execute (e.g., stock_list,realtime,historical,financial,stock_quote,dividend_info)")
     parser.add_argument('--archive_directory', type=str, default='archive', help="Directory to store archived data")
-    parser.add_argument('--market_names', type=str, default='上证指数,深证成指,创业板指', help="Comma-separated list of market names (e.g., SH,SZ,BJ)")
+    parser.add_argument('--market_names', type=str, default='上证指数,深证成指,北交所,沪深300', help="Comma-separated list of market names (e.g., SH,SZ,BJ)")
     parser.add_argument('--symbols', type=str, default='', help="Comma-separated list of stock symbols (e.g., 600000.SH , 000001.SZ)")
     parser.add_argument('--duration', type=int, default=int(datetime.strptime(today + ' 16:00:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp()), help="Duration in seconds for realtime data")
     parser.add_argument('--start_date', type=str, default='2001-01-01', help="Start date for historical data (YYYY-MM-DD)")
