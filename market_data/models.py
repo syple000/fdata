@@ -204,7 +204,7 @@ def get_exchange(code: str) -> str:
         return MarketType.SH.value
     elif code.startswith(('0', '3')):
         return MarketType.SZ.value
-    elif code.startswith('8') or code.startswith('4'):
+    elif code.startswith('8') or code.startswith('4') or code.startswith('920'):
         return MarketType.BJ.value
     else:
         raise ValueError(f"Unsupported stock code: {code}. Expected code starting with 0, 3, 6, 8 or 4 for SZ, SH or BJ markets respectively.")
