@@ -130,34 +130,122 @@ class HistoricalData:
 
 @dataclass
 class FinancialData:
-    """财务数据结构，包含利润表、资产负债表和现金流量表的重要字段"""
+    """财务数据结构，适用于银行、保险、证券、综合等不同行业"""
     symbol: Symbol
     report_date: str
 
-    # 利润表
-    total_revenue: float             # 营业收入（TOTAL_OPERATE_INCOME）
-    operating_cost: float            # 营业成本（OPERATE_COST）
-    gross_profit: float              # 毛利润（GROSS_PROFIT）
-    operating_profit: float          # 营业利润（OPERATE_PROFIT）
-    profit_before_tax: float         # 利润总额（TOTAL_PROFIT）
-    net_profit: float                # 归属母公司所有者的净利润（PARENT_NETPROFIT）
-    eps: float                        # 每股收益（BASIC_EPS）
-    roe: float                        # 净资产收益率（WEIGHTAVG_ROE）
+    # ========== 资产负债表 - 通用字段 ==========
+    total_assets: float                  # 资产总计 - 通用
+    current_assets: float                # 流动资产合计 - 通用
+    non_current_assets: float            # 非流动资产合计 - 通用
+    total_liabilities: float             # 负债合计 - 通用
+    current_liabilities: float           # 流动负债合计 - 通用
+    non_current_liabilities: float       # 非流动负债合计 - 通用
+    total_equity: float                  # 股东权益合计 - 通用
+    fixed_asset: float                   # 固定资产净额 - 通用
+    goodwill: float                      # 商誉 - 通用
+    intangible_asset: float              # 无形资产 - 通用
+    defer_tax_asset: float               # 递延所得税资产 - 通用
+    defer_tax_liab: float                # 递延所得税负债 - 通用
 
-    # 资产负债表
-    total_assets: float              # 资产总计（TOTAL_ASSETS）
-    current_assets: float            # 流动资产合计（CURRENT_ASSETS）
-    non_current_assets: float        # 非流动资产合计（NON_CURRENT_ASSETS）
-    total_liabilities: float         # 负债合计（TOTAL_LIABILITIES）
-    current_liabilities: float       # 流动负债合计（CURRENT_LIABILITIES）
-    non_current_liabilities: float   # 非流动负债合计（NON_CURRENT_LIABILITIES）
-    total_equity: float              # 股东权益合计（TOTAL_EQUITY）
+    # ========== 资产负债表 - 银行业特有字段 ==========
+    cash_deposit_pbc: float              # 存放央行款项（银行）
+    loan_advance: float                  # 发放贷款及垫款（银行）
+    accept_deposit: float                # 吸收存款（银行）
+    bond_payable: float                  # 应付债券（银行/保险重要）
+    general_risk_reserve: float          # 一般风险准备（银行/证券）
 
-    # 现金流量表
-    net_operate_cashflow: float      # 经营活动产生的现金流量净额（NET_CASH_OPER_ACT）
-    net_invest_cashflow: float       # 投资活动产生的现金流量净额（NET_CASH_INVEST_ACT）
-    net_finance_cashflow: float      # 筹资活动产生的现金流量净额（NET_CASH_FINA_ACT）
-    free_cashflow: float             # 自由现金流（FREE_CASH_FLOW）
+    # ========== 资产负债表 - 保险业特有字段 ==========
+    fvtpl_finasset: float               # 以公允价值计量资产（保险）
+    creditor_invest: float               # 债权投资（保险）
+    other_creditor_invest: float         # 其他债权投资（保险）
+    other_equity_invest: float           # 其他权益工具投资（保险）
+    agent_trade_security: float          # 代理买卖证券款（保险）
+
+    # ========== 资产负债表 - 证券业特有字段 ==========
+    customer_deposit: float              # 客户资金存款（证券）
+    settle_excess_reserve: float         # 结算备付金（证券）
+    buy_resale_finasset: float           # 买入返售金融资产（证券）
+    sell_repo_finasset: float            # 卖出回购金融资产款（证券）
+    trade_finasset_notfvtpl: float       # 交易性金融资产（证券）
+    derive_finasset: float               # 衍生金融资产（证券）
+
+    # ========== 资产负债表 - 制造业/综合行业字段 ==========
+    inventory: float                     # 存货（制造业）
+    accounts_receivable: float           # 应收账款（制造业）
+    accounts_payable: float              # 应付账款（制造业）
+    short_loan: float                    # 短期借款（制造业）
+    prepayment: float                    # 预付款项（制造业）
+
+    # ========== 利润表 - 通用字段 ==========
+    total_revenue: float                 # 营业收入 - 通用
+    operating_cost: float                # 营业成本 - 通用  
+    gross_profit: float                  # 毛利润 - 通用
+    operating_profit: float              # 营业利润 - 通用
+    total_profit: float                  # 利润总额 - 通用
+    net_profit: float                    # 归属母公司净利润 - 通用
+    basic_eps: float                     # 基本每股收益 - 通用
+    roe: float                           # 净资产收益率 - 通用
+    operate_tax_add: float               # 营业税金及附加 - 通用
+    manage_expense: float                # 管理费用 - 通用
+
+    # ========== 利润表 - 银行业特有字段 ==========
+    interest_net_income: float           # 利息净收入（银行）
+    interest_income: float               # 利息收入（银行）
+    interest_expense: float              # 利息支出（银行）
+    fee_commission_net_income: float     # 手续费及佣金净收入（银行/证券）
+    credit_impairment_loss: float        # 信用减值损失（银行）
+
+    # ========== 利润表 - 保险业特有字段 ==========
+    earned_premium: float                # 已赚保费（保险）
+    insurance_income: float              # 保险业务收入（保险）
+    bank_interest_ni: float              # 银行业务利息净收入（保险）
+    uninsurance_cni: float               # 非保险业务手续费净收入（保险）
+    invest_income: float                 # 投资收益 - 通用但保险业重要
+    fairvalue_change: float              # 公允价值变动损益 - 通用但保险业重要
+
+    # ========== 利润表 - 证券业特有字段 ==========
+    agent_security_ni: float             # 代理买卖证券净收入（证券）
+    security_underwrite_ni: float        # 证券承销净收入（证券）
+    asset_manage_ni: float               # 资产管理净收入（证券）
+
+    # ========== 利润表 - 制造业/综合行业字段 ==========
+    sale_expense: float                  # 销售费用（制造业）
+    finance_expense: float               # 财务费用 - 通用
+    asset_impairment_income: float       # 资产减值损失（制造业）
+    other_income: float                  # 其他收益 - 通用
+
+    # ========== 现金流量表 - 通用字段 ==========
+    net_operate_cashflow: float          # 经营活动现金流量净额 - 通用
+    net_invest_cashflow: float           # 投资活动现金流量净额 - 通用
+    net_finance_cashflow: float          # 筹资活动现金流量净额 - 通用
+    total_operate_inflow: float          # 经营活动现金流入小计 - 通用
+    total_operate_outflow: float         # 经营活动现金流出小计 - 通用
+    total_invest_inflow: float           # 投资活动现金流入小计 - 通用
+    total_invest_outflow: float          # 投资活动现金流出小计 - 通用
+
+    # ========== 现金流量表 - 银行业特有字段 ==========
+    deposit_iofi_other: float            # 存放同业及其他金融机构款项净增加额（银行）
+    loan_advance_add: float              # 客户贷款及垫款净增加额（银行）
+    borrow_repo_add: float               # 同业及其他金融机构存放款项净增加额（银行）
+
+    # ========== 现金流量表 - 保险业特有字段 ==========
+    deposit_interbank_add: float         # 存放同业款项净增加额（保险）
+    receive_origic_premium: float        # 收到原保险合同保费（保险）
+    pay_origic_compensate: float         # 支付原保险合同赔付款项（保险）
+
+    # ========== 现金流量表 - 证券业特有字段 ==========
+    disposal_tfa_add: float              # 处置交易性金融资产净增加额（证券）
+    receive_interest_commission: float    # 收取利息、手续费及佣金（证券）
+    repo_business_add: float             # 回购业务资金净增加额（证券）
+    pay_agent_trade: float               # 支付给客户及代理证券款（证券）
+
+    # ========== 现金流量表 - 制造业/综合行业字段 ==========
+    sales_services: float                # 销售商品、提供劳务收到的现金（制造业）
+    buy_services: float                  # 购买商品、接受劳务支付的现金（制造业）
+    construct_long_asset: float          # 购建固定资产、无形资产支付的现金 - 通用
+    pay_staff_cash: float                # 支付给职工以及为职工支付的现金 - 通用
+    pay_all_tax: float                   # 支付的各项税费 - 通用
 
 @dataclass
 class StockQuoteInfo:

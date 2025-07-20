@@ -4,6 +4,7 @@ from typing import Dict, List, Any
 from dataclasses import asdict
 from urllib.parse import urlencode
 import logging
+import asyncio
 from ..spider.rate_limiter import RateLimiterManager
 from ..spider.spider_core import AntiDetectionSpider
 from ..utils.retry import async_retry
@@ -691,130 +692,309 @@ class MarketDataFetcher:
 
     async def _fetch_financial_data_em(self, symbol: Symbol, company_type: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
         """
-        从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
+        从东方财富获取股票财务数据，根据公司类型调用不同的财务报表接口
         
-        API接口示例：
-        - 资产负债表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BBALANCE&sty=F10_FINANCE_BBALANCE&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        - 利润表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BINCOME&sty=APP_F10_BINCOME&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        - 现金流量表: https://datacenter.eastmoney.com/securities/api/data/get?type=RPT_F10_FINANCE_BCASHFLOW&sty=APP_F10_BCASHFLOW&filter=(SECUCODE="600000.SH")&p=1&ps=5&sr=-1&st=REPORT_DATE&source=HSF10&client=PC
-        """
-        
-        tables = [
-            ("RPT_F10_FINANCE_BBALANCE", "F10_FINANCE_BBALANCE"),   # 资产负债表
-            ("RPT_F10_FINANCE_BINCOME", "APP_F10_BINCOME"),         # 利润表
-            ("RPT_F10_FINANCE_BCASHFLOW", "APP_F10_BCASHFLOW"),     # 现金流量表
-        ]
-        records: Dict[str, Dict[str, Any]] = {}
-        page_size = 50
-        
-        for table_type, sty in tables:
-            page = 1
-            while True:
-                @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
-                async def _fetch_financial_data():
-                    params = {
-                        "type": table_type,
-                        "sty": sty,
-                        "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
-                        "p": page,
-                        "ps": page_size,
-                        "sr": -1,
-                        "st": "REPORT_DATE",
-                        "source": "HSF10",
-                        "client": "PC",
-                    }
-                    url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
-                    async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
-                        resp = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
-                    if not resp or not resp.success:
-                        raise Exception(f"Failed to fetch {table_type} for {symbol}: {resp.error if resp else 'No response'}")
-
-                    payload = json.loads(extract_content(resp.content, "html > body > pre"))
-                    if not payload.get('result') or not payload['result'].get('data'):
-                        return False
-                    
-                    rows = payload['result']['data']
-                    if not rows:
-                        return False
-                    
-                    for item in rows:
-                        report_date = item.get("REPORT_DATE", "").split(" ")[0]
-                        if not report_date:
-                            continue
-                            
-                        record = records.setdefault(report_date, {"symbol": symbol, "report_date": report_date})
-                        
-                        if table_type == "RPT_F10_FINANCE_BBALANCE":  # 资产负债表
-                            record["total_assets"] = float(item.get("TOTAL_ASSETS") or 0)
-                            record["current_assets"] = float(item.get("TOTAL_CURRENT_ASSETS") or 0)
-                            record["non_current_assets"] = float(item.get("TOTAL_NONCURRENT_ASSETS") or 0)
-                            record["total_liabilities"] = float(item.get("TOTAL_LIABILITIES") or 0)
-                            record["current_liabilities"] = float(item.get("TOTAL_CURRENT_LIAB") or 0)
-                            record["non_current_liabilities"] = float(item.get("TOTAL_NONCURRENT_LIAB") or 0)
-                            record["total_equity"] = float(item.get("TOTAL_EQUITY") or 0)
-                        elif table_type == "RPT_F10_FINANCE_BINCOME":  # 利润表
-                            record["total_revenue"] = float(item.get("OPERATE_INCOME") or 0)
-                            record["operating_cost"] = float(item.get("OPERATE_EXPENSE") or 0)
-                            record["operating_profit"] = float(item.get("OPERATE_PROFIT") or 0)
-                            record["profit_before_tax"] = float(item.get("TOTAL_PROFIT") or 0)
-                            record["net_profit"] = float(item.get("PARENT_NETPROFIT") or 0)
-                            record["eps"] = float(item.get("BASIC_EPS") or 0)
-                            # 毛利 = 营业收入 - 营业成本
-                            record["gross_profit"] = record["total_revenue"] - record["operating_cost"]
-                        elif table_type == "RPT_F10_FINANCE_BCASHFLOW":  # 现金流量表
-                            record["net_operate_cashflow"] = float(item.get("NETCASH_OPERATE") or 0)
-                            record["net_invest_cashflow"] = float(item.get("NETCASH_INVEST") or 0)
-                            record["net_finance_cashflow"] = float(item.get("NETCASH_FINANCE") or 0)
-                            # 自由现金流 = 经营活动现金流 - 构建长期资产支出
-                            record["free_cashflow"] = record["net_operate_cashflow"] - float(item.get('CONSTRUCT_LONG_ASSET') or 0)
-                    
-                    if len(rows) < page_size:
-                        return False
-                    
-                    return True
-
-                continue_fetch = await _fetch_financial_data()
-                if not continue_fetch:
-                    break
-                page += 1
-        
-        # 构建 FinancialData 列表
-        result: List[FinancialData] = []
-        for report_date, record in sorted(records.items(), reverse=True):
-            # 计算 ROE (净资产收益率) = 归属母公司净利润 / 归属母公司股东权益 * 100
-            roe = 0.0
-            if record.get("total_equity", 0.0) > 0:
-                roe = (record.get("net_profit", 0.0) / record.get("total_equity", 1.0)) * 100
+        Args:
+            symbol: 股票代码
+            company_type: 公司类型 ('银行', '保险', '证券', '通用')
+            csv_dao: CSV数据访问对象
             
-            result.append(
-                FinancialData(
-                    symbol=record["symbol"],
-                    report_date=record["report_date"],
-                    total_revenue=record.get("total_revenue", 0.0),
-                    operating_cost=record.get("operating_cost", 0.0),
-                    gross_profit=record.get("gross_profit", 0.0),
-                    operating_profit=record.get("operating_profit", 0.0),
-                    profit_before_tax=record.get("profit_before_tax", 0.0),
-                    net_profit=record.get("net_profit", 0.0),
-                    eps=record.get("eps", 0.0),
-                    roe=roe,
-                    total_assets=record.get("total_assets", 0.0),
-                    current_assets=record.get("current_assets", 0.0),
-                    non_current_assets=record.get("non_current_assets", 0.0),
-                    total_liabilities=record.get("total_liabilities", 0.0),
-                    current_liabilities=record.get("current_liabilities", 0.0),
-                    non_current_liabilities=record.get("non_current_liabilities", 0.0),
-                    total_equity=record.get("total_equity", 0.0),
-                    net_operate_cashflow=record.get("net_operate_cashflow", 0.0),
-                    net_invest_cashflow=record.get("net_invest_cashflow", 0.0),
-                    net_finance_cashflow=record.get("net_finance_cashflow", 0.0),
-                    free_cashflow=record.get("free_cashflow", 0.0),
-                )
-            )
+        Returns:
+            财务数据列表
+        """
+        all_financial_data: List[FinancialData] = []
         
-        logging.info(f"Fetched {len(result)} financial data records for {symbol}")
-        csv_dao.write_records(result)
-        return result
+        # 根据公司类型确定使用的API类型
+        api_types = {
+            '银行': {
+                'balance': ['RPT_F10_FINANCE_BBALANCE', 'F10_FINANCE_BBALANCE'],
+                'income': ['RPT_F10_FINANCE_BINCOME', 'APP_F10_BINCOME'], 
+                'cashflow': ['RPT_F10_FINANCE_BCASHFLOW', 'APP_F10_BCASHFLOW']
+            },
+            '保险': {
+                'balance': ['RPT_F10_FINANCE_IBALANCE', 'F10_FINANCE_IBALANCE'],
+                'income': ['RPT_F10_FINANCE_IINCOME', 'APP_F10_IINCOME'],
+                'cashflow': ['RPT_F10_FINANCE_ICASHFLOW', 'APP_F10_ICASHFLOW']
+            },
+            '证券': {
+                'balance': ['RPT_F10_FINANCE_SBALANCE', 'F10_FINANCE_SBALANCE'],
+                'income': ['RPT_F10_FINANCE_SINCOME', 'APP_F10_SINCOME'],
+                'cashflow': ['RPT_F10_FINANCE_SCASHFLOW', 'APP_F10_SCASHFLOW']
+            },
+            '综合': {
+                'balance': ['RPT_F10_FINANCE_GBALANCE', 'F10_FINANCE_GBALANCE'],
+                'income': ['RPT_F10_FINANCE_GINCOME', 'APP_F10_GINCOME'],
+                'cashflow': ['RPT_F10_FINANCE_GCASHFLOW', 'APP_F10_GCASHFLOW']
+            }
+        }
+        
+        if company_type not in api_types:
+            raise ValueError(f"Unsupported company type: {company_type}. Supported types: {list(api_types.keys())}")
+        
+        apis = api_types[company_type]
+        page_size = 100
+        
+        # 获取资产负债表数据
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        async def _fetch_balance_sheet():
+            params = {
+                "type": apis['balance'][0],
+                "sty": apis['balance'][1],
+                "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
+                "p": "1",
+                "ps": str(page_size),
+                "sr": "-1",
+                "st": "REPORT_DATE",
+                "source": "HSF10",
+                "client": "PC"
+            }
+            
+            url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
+            async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+            
+            if not response or not response.success:
+                raise Exception(f"Failed to fetch balance sheet: {response.error if response else 'No response'}")
+            
+            payload = json.loads(extract_content(response.content, "html > body > pre"))
+            return payload.get('result', {}).get('data', [])
+        
+        # 获取利润表数据
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        async def _fetch_income_statement():
+            params = {
+                "type": apis['income'][0],
+                "sty": apis['income'][1],
+                "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
+                "p": "1", 
+                "ps": str(page_size),
+                "sr": "-1",
+                "st": "REPORT_DATE",
+                "source": "HSF10",
+                "client": "PC"
+            }
+            
+            url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
+            async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+            
+            if not response or not response.success:
+                raise Exception(f"Failed to fetch income statement: {response.error if response else 'No response'}")
+            
+            payload = json.loads(extract_content(response.content, "html > body > pre"))
+            return payload.get('result', {}).get('data', [])
+        
+        # 获取现金流量表数据
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        async def _fetch_cashflow_statement():
+            params = {
+                "type": apis['cashflow'][0],
+                "sty": apis['cashflow'][1],
+                "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
+                "p": "1",
+                "ps": str(page_size), 
+                "sr": "-1",
+                "st": "REPORT_DATE",
+                "source": "HSF10",
+                "client": "PC"
+            }
+            
+            url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
+            async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+                response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+            
+            if not response or not response.success:
+                raise Exception(f"Failed to fetch cashflow statement: {response.error if response else 'No response'}")
+            
+            payload = json.loads(extract_content(response.content, "html > body > pre"))
+            return payload.get('result', {}).get('data', [])
+        
+        # 并发获取三个报表数据
+        balance_data, income_data, cashflow_data = await asyncio.gather(
+            _fetch_balance_sheet(),
+            _fetch_income_statement(), 
+            _fetch_cashflow_statement(),
+            return_exceptions=True
+        )
+        
+        # 处理异常情况
+        if isinstance(balance_data, Exception):
+            logging.warning(f"Failed to fetch balance sheet for {symbol}: {balance_data}")
+            balance_data = []
+        if isinstance(income_data, Exception):
+            logging.warning(f"Failed to fetch income statement for {symbol}: {income_data}")
+            income_data = []
+        if isinstance(cashflow_data, Exception):
+            logging.warning(f"Failed to fetch cashflow statement for {symbol}: {cashflow_data}")
+            cashflow_data = []
+        
+        # 按报告日期合并数据
+        merged_data = {}
+        
+        # 处理资产负债表数据
+        for item in balance_data:
+            report_date = item.get('REPORT_DATE', '').split(' ')[0]
+            if report_date and report_date not in merged_data:
+                merged_data[report_date] = {}
+            merged_data[report_date]['balance'] = item
+        
+        # 处理利润表数据
+        for item in income_data:
+            report_date = item.get('REPORT_DATE', '').split(' ')[0]
+            if report_date and report_date not in merged_data:
+                merged_data[report_date] = {}
+            merged_data[report_date]['income'] = item
+        
+        # 处理现金流量表数据
+        for item in cashflow_data:
+            report_date = item.get('REPORT_DATE', '').split(' ')[0]
+            if report_date and report_date not in merged_data:
+                merged_data[report_date] = {}
+            merged_data[report_date]['cashflow'] = item
+        
+        # 生成FinancialData对象
+        for report_date, data in merged_data.items():
+            balance = data.get('balance', {})
+            income = data.get('income', {})
+            cashflow = data.get('cashflow', {})
+            
+            # 统一字段映射，处理不同公司类型的字段差异
+            def safe_get_float(data_dict, key, default=0.0):
+                value = data_dict.get(key)
+                if value is None:
+                    return default
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            financial_data = FinancialData(
+                symbol=symbol,
+                report_date=report_date,
+                
+                # ========== 资产负债表 - 通用字段 ==========
+                total_assets=safe_get_float(balance, 'TOTAL_ASSETS'),
+                current_assets=safe_get_float(balance, 'TOTAL_CURRENT_ASSETS'),
+                non_current_assets=safe_get_float(balance, 'TOTAL_NONCURRENT_ASSETS'),
+                total_liabilities=safe_get_float(balance, 'TOTAL_LIABILITIES'),
+                current_liabilities=safe_get_float(balance, 'TOTAL_CURRENT_LIAB'),
+                non_current_liabilities=safe_get_float(balance, 'TOTAL_NONCURRENT_LIAB'),
+                total_equity=safe_get_float(balance, 'TOTAL_EQUITY'),
+                fixed_asset=safe_get_float(balance, 'FIXED_ASSET'),
+                goodwill=safe_get_float(balance, 'GOODWILL'),
+                intangible_asset=safe_get_float(balance, 'INTANGIBLE_ASSET'),
+                defer_tax_asset=safe_get_float(balance, 'DEFER_TAX_ASSET'),
+                defer_tax_liab=safe_get_float(balance, 'DEFER_TAX_LIAB'),
+                
+                # ========== 资产负债表 - 银行业特有字段 ==========
+                cash_deposit_pbc=safe_get_float(balance, 'CASH_DEPOSIT_PBC'),
+                loan_advance=safe_get_float(balance, 'LOAN_ADVANCE'),
+                accept_deposit=safe_get_float(balance, 'ACCEPT_DEPOSIT'),
+                bond_payable=safe_get_float(balance, 'BOND_PAYABLE'),
+                general_risk_reserve=safe_get_float(balance, 'GENERAL_RISK_RESERVE'),
+                
+                # ========== 资产负债表 - 保险业特有字段 ==========
+                fvtpl_finasset=safe_get_float(balance, 'FVTPL_FINASSET'),
+                creditor_invest=safe_get_float(balance, 'CREDITOR_INVEST'),
+                other_creditor_invest=safe_get_float(balance, 'OTHER_CREDITOR_INVEST'),
+                other_equity_invest=safe_get_float(balance, 'OTHER_EQUITY_INVEST'),
+                agent_trade_security=safe_get_float(balance, 'AGENT_TRADE_SECURITY'),
+                
+                # ========== 资产负债表 - 证券业特有字段 ==========
+                customer_deposit=safe_get_float(balance, 'CUSTOMER_DEPOSIT'),
+                settle_excess_reserve=safe_get_float(balance, 'SETTLE_EXCESS_RESERVE'),
+                buy_resale_finasset=safe_get_float(balance, 'BUY_RESALE_FINASSET'),
+                sell_repo_finasset=safe_get_float(balance, 'SELL_REPO_FINASSET'),
+                trade_finasset_notfvtpl=safe_get_float(balance, 'TRADE_FINASSET_NOTFVTPL'),
+                derive_finasset=safe_get_float(balance, 'DERIVE_FINASSET'),
+                
+                # ========== 资产负债表 - 制造业/综合行业字段 ==========
+                inventory=safe_get_float(balance, 'INVENTORY'),
+                accounts_receivable=safe_get_float(balance, 'ACCOUNTS_RECE'),
+                accounts_payable=safe_get_float(balance, 'ACCOUNTS_PAYABLE'),
+                short_loan=safe_get_float(balance, 'SHORT_LOAN'),
+                prepayment=safe_get_float(balance, 'PREPAYMENT'),
+                
+                # ========== 利润表 - 通用字段 ==========
+                total_revenue=safe_get_float(income, 'TOTAL_OPERATE_INCOME') or safe_get_float(income, 'OPERATE_INCOME'),
+                operating_cost=safe_get_float(income, 'TOTAL_OPERATE_COST') or safe_get_float(income, 'OPERATE_COST') or safe_get_float(income, 'OPERATE_EXPENSE'),
+                gross_profit=(safe_get_float(income, 'TOTAL_OPERATE_INCOME') or safe_get_float(income, 'OPERATE_INCOME')) - (safe_get_float(income, 'TOTAL_OPERATE_COST') or safe_get_float(income, 'OPERATE_COST') or safe_get_float(income, 'OPERATE_EXPENSE')),
+                operating_profit=safe_get_float(income, 'OPERATE_PROFIT'),
+                total_profit=safe_get_float(income, 'TOTAL_PROFIT'),
+                net_profit=safe_get_float(income, 'PARENT_NETPROFIT') or safe_get_float(income, 'NETPROFIT'),
+                basic_eps=safe_get_float(income, 'BASIC_EPS'),
+                roe=(safe_get_float(income, 'PARENT_NETPROFIT') or safe_get_float(income, 'NETPROFIT')) / safe_get_float(balance, 'TOTAL_EQUITY') * 100 if safe_get_float(balance, 'TOTAL_EQUITY') != 0 else 0.0,
+                operate_tax_add=safe_get_float(income, 'OPERATE_TAX_ADD'),
+                manage_expense=safe_get_float(income, 'MANAGE_EXPENSE') or safe_get_float(income, 'BUSINESS_MANAGE_EXPENSE'),
+                
+                # ========== 利润表 - 银行业特有字段 ==========
+                interest_net_income=safe_get_float(income, 'INTEREST_NI'),
+                interest_income=safe_get_float(income, 'INTEREST_INCOME'),
+                interest_expense=safe_get_float(income, 'INTEREST_EXPENSE'),
+                fee_commission_net_income=safe_get_float(income, 'FEE_COMMISSION_NI'),
+                credit_impairment_loss=safe_get_float(income, 'CREDIT_IMPAIRMENT_LOSS'),
+                
+                # ========== 利润表 - 保险业特有字段 ==========
+                earned_premium=safe_get_float(income, 'EARNED_PREMIUM'),
+                insurance_income=safe_get_float(income, 'INSURANCE_INCOME'),
+                bank_interest_ni=safe_get_float(income, 'BANK_INTEREST_NI'),
+                uninsurance_cni=safe_get_float(income, 'UNINSURANCE_CNI'),
+                invest_income=safe_get_float(income, 'INVEST_INCOME'),
+                fairvalue_change=safe_get_float(income, 'FAIRVALUE_CHANGE') or safe_get_float(income, 'FAIRVALUE_CHANGE_INCOME'),
+                
+                # ========== 利润表 - 证券业特有字段 ==========
+                agent_security_ni=safe_get_float(income, 'AGENT_SECURITY_NI'),
+                security_underwrite_ni=safe_get_float(income, 'SECURITY_UNDERWRITE_NI'),
+                asset_manage_ni=safe_get_float(income, 'ASSET_MANAGE_NI'),
+                
+                # ========== 利润表 - 制造业/综合行业字段 ==========
+                sale_expense=safe_get_float(income, 'SALE_EXPENSE'),
+                finance_expense=safe_get_float(income, 'FINANCE_EXPENSE'),
+                asset_impairment_income=safe_get_float(income, 'ASSET_IMPAIRMENT_INCOME') or safe_get_float(income, 'ASSET_IMPAIRMENT_LOSS'),
+                other_income=safe_get_float(income, 'OTHER_INCOME'),
+                
+                # ========== 现金流量表 - 通用字段 ==========
+                net_operate_cashflow=safe_get_float(cashflow, 'NETCASH_OPERATE'),
+                net_invest_cashflow=safe_get_float(cashflow, 'NETCASH_INVEST'),
+                net_finance_cashflow=safe_get_float(cashflow, 'NETCASH_FINANCE'),
+                total_operate_inflow=safe_get_float(cashflow, 'TOTAL_OPERATE_INFLOW'),
+                total_operate_outflow=safe_get_float(cashflow, 'TOTAL_OPERATE_OUTFLOW'),
+                total_invest_inflow=safe_get_float(cashflow, 'TOTAL_INVEST_INFLOW'),
+                total_invest_outflow=safe_get_float(cashflow, 'TOTAL_INVEST_OUTFLOW'),
+                
+                # ========== 现金流量表 - 银行业特有字段 ==========
+                deposit_iofi_other=safe_get_float(cashflow, 'DEPOSIT_IOFI_OTHER'),
+                loan_advance_add=safe_get_float(cashflow, 'LOAN_ADVANCE_ADD'),
+                borrow_repo_add=safe_get_float(cashflow, 'BORROW_REPO_ADD'),
+                
+                # ========== 现金流量表 - 保险业特有字段 ==========
+                deposit_interbank_add=safe_get_float(cashflow, 'DEPOSIT_INTERBANK_ADD'),
+                receive_origic_premium=safe_get_float(cashflow, 'RECEIVE_ORIGIC_PREMIUM'),
+                pay_origic_compensate=safe_get_float(cashflow, 'PAY_ORIGIC_COMPENSATE'),
+                
+                # ========== 现金流量表 - 证券业特有字段 ==========
+                disposal_tfa_add=safe_get_float(cashflow, 'DISPOSAL_TFA_ADD'),
+                receive_interest_commission=safe_get_float(cashflow, 'RECEIVE_INTEREST_COMMISSION'),
+                repo_business_add=safe_get_float(cashflow, 'REPO_BUSINESS_ADD'),
+                pay_agent_trade=safe_get_float(cashflow, 'PAY_AGENT_TRADE'),
+                
+                # ========== 现金流量表 - 制造业/综合行业字段 ==========
+                sales_services=safe_get_float(cashflow, 'SALES_SERVICES'),
+                buy_services=safe_get_float(cashflow, 'BUY_SERVICES'),
+                construct_long_asset=safe_get_float(cashflow, 'CONSTRUCT_LONG_ASSET'),
+                pay_staff_cash=safe_get_float(cashflow, 'PAY_STAFF_CASH'),
+                pay_all_tax=safe_get_float(cashflow, 'PAY_ALL_TAX'),
+            )
+            
+            all_financial_data.append(financial_data)
+        
+        # 按报告日期排序
+        all_financial_data.sort(key=lambda x: x.report_date, reverse=True)
+        
+        logging.info(f"Fetched {len(all_financial_data)} financial data records for {symbol} ({company_type})")
+        
+        csv_dao.write_records(all_financial_data)
+        return all_financial_data
 
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
         """将数据对象转换为字典格式，便于持久化存储"""
