@@ -6,3 +6,4 @@ playwright_stealth==2.0.0
 requests==2.32.4
 bs4==0.0.2
 mplfinance==0.12.10b0
+pywinauto==0.6.9
