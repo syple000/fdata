@@ -87,6 +87,9 @@ async def main(args):
         os.makedirs(args.archive_directory)
     if args.market_names:
         args.market_names = [name.strip() for name in args.market_names.split(',') if name.strip()]
+    if args.symbols_file: # 覆盖symbols参数
+        df = pd.read_csv(args.symbols_file, encoding='utf-8', dtype=str).dropna(subset=['symbol'])
+        args.symbols = ','.join(df['symbol'].tolist())
     if args.symbols:
         args.symbols = [Symbol.from_string(symbol.strip()) for symbol in args.symbols.split(',') if symbol.strip()]
     if args.duration:
@@ -109,12 +112,16 @@ async def main(args):
                 if not args.market_names:
                     raise ValueError("Market names must be provided for stock list data")
                 for market_name in args.market_names:
+                    dst_file_path = os.path.join(args.archive_directory, f'stock_list_{market_name}.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, StockInfo) as dao:
                         await dumper.dump_stock_list([market_name], dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
                     df.sort_values(by='symbol', inplace=True)
-                    df.to_csv(os.path.join(args.archive_directory, f'stock_list_{market_name}.csv'), index=False, encoding='utf-8')
+                    df.to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             elif function == 'realtime':
                 if not args.symbols:
@@ -182,57 +189,65 @@ async def main(args):
                     raise ValueError(f"Invalid adjust_type: {args.adjust_type}")
 
                 for symbol in args.symbols:
+                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, HistoricalData) as dao:
                         await dumper.dump_historical_data([symbol], args.start_date, args.end_date, dao, kline_type, adjust_type)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
-                    symbol_dir = os.path.join(args.archive_directory, symbol.to_string())
-                    if not os.path.exists(symbol_dir):
-                        os.makedirs(symbol_dir)
-                    csv_path = os.path.join(symbol_dir, f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
-                    merge_data(csv_path, df, 'date', 'date').to_csv(csv_path, index=False, encoding='utf-8')
+                    if not os.path.exists(os.path.dirname(dst_file_path)):
+                        os.makedirs(os.path.dirname(dst_file_path))
+                    merge_data(dst_file_path, df, 'date', 'date').to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             elif function == 'financial':
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for financial data")
                 for symbol in args.symbols:
+                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'financial_data.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, FinancialData) as dao:
                         await dumper.dump_financial_data([symbol], dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
-                    symbol_dir = os.path.join(args.archive_directory, symbol.to_string())
-                    if not os.path.exists(symbol_dir):
-                        os.makedirs(symbol_dir)
-                    csv_path = os.path.join(symbol_dir, 'financial_data.csv')
-                    merge_data(csv_path, df, 'report_date', 'report_date').to_csv(csv_path, index=False, encoding='utf-8')
+                    if not os.path.exists(os.path.dirname(dst_file_path)):
+                        os.makedirs(os.path.dirname(dst_file_path))
+                    merge_data(dst_file_path, df, 'report_date', 'report_date').to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             elif function == 'stock_quote':
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for stock quote data")
                 for symbol in args.symbols:
+                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'stock_quote_{datetime.now().strftime("%Y-%m-%d")}.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, StockQuoteInfo) as dao:
                         await dumper.dump_stock_quote([symbol], dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
-                    symbol_dir = os.path.join(args.archive_directory, symbol.to_string())
-                    if not os.path.exists(symbol_dir):
-                        os.makedirs(symbol_dir)
-                    csv_path = os.path.join(symbol_dir, 'stock_quote.csv')
-                    df.to_csv(csv_path, index=False, encoding='utf-8')
+                    if not os.path.exists(os.path.dirname(dst_file_path)):
+                        os.makedirs(os.path.dirname(dst_file_path))
+                    df.to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             elif function == 'dividend_info':
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for dividend info data")
                 for symbol in args.symbols:
+                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'dividend_info.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, DividendInfo) as dao:
                         await dumper.dump_dividend_info([symbol], dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
-                    symbol_dir = os.path.join(args.archive_directory, symbol.to_string())
-                    if not os.path.exists(symbol_dir):
-                        os.makedirs(symbol_dir)
-                    csv_path = os.path.join(symbol_dir, 'dividend_info.csv')
-                    merge_data(csv_path, df, 'plan_notice_date', 'plan_notice_date').to_csv(csv_path, index=False, encoding='utf-8')
+                    if not os.path.exists(os.path.dirname(dst_file_path)):
+                        os.makedirs(os.path.dirname(dst_file_path))
+                    merge_data(dst_file_path, df, 'plan_notice_date', 'plan_notice_date').to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             else:
                 raise ValueError(f"Invalid function: {function}")
@@ -248,7 +263,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Market Data Dumper")
     parser.add_argument('--functions', type=str, required=True, help="Comma-separated list of functions to execute (e.g., stock_list,realtime,historical,financial,stock_quote,dividend_info)")
     parser.add_argument('--archive_directory', type=str, default='archive', help="Directory to store archived data")
+    parser.add_argument('--write_mode', type=str, default='skip_existing', choices=['skip_existing', 'default'], help="Write mode for CSV files. skip_existing will skip existing file, default will merge existing file and fetched data(for historical, financial, dividend) or overwrite(for stock_list, stock_quote).")
     parser.add_argument('--market_names', type=str, default='上证指数,深证成指,北交所,沪深300', help="Comma-separated list of market names (e.g., SH,SZ,BJ)")
+    parser.add_argument('--symbols_file', type=str, default='', help="File containing stock symbols, one symbol per line") # 如果有symbols_file，则symbols参数无效
     parser.add_argument('--symbols', type=str, default='', help="Comma-separated list of stock symbols (e.g., 600000.SH , 000001.SZ)")
     parser.add_argument('--duration', type=int, default=int(datetime.strptime(today + ' 16:00:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp()), help="Duration in seconds for realtime data")
     parser.add_argument('--start_date', type=str, default='2001-01-01', help="Start date for historical data (YYYY-MM-DD)")
