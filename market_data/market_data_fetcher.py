@@ -538,6 +538,69 @@ class MarketDataFetcher:
         csv_dao.write_records(all_dividends)
         return all_dividends
 
+    async def fetch_stock_company_type(self, csv_dao: CSVGenericDAO[StockInfo], from_: str = 'eastmoney') -> StockInfo:
+        if from_ == 'eastmoney':
+            return await self._fetch_stock_company_type_em(csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina stock company type fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
+    async def _fetch_stock_company_type_em(self, csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
+        """
+        从东方财富获取股票公司类型信息
+        
+        Returns:
+            股票公司类型信息列表
+        """
+        all_stocks: List[StockInfo] = []
+        
+        params = {
+        "type": "RPT_F10_PUBLIC_COMPANYTPYE",
+        "sty": "ALL",
+        "source": "HSF10",
+        "client": "PC",
+        }
+        
+        url = f"https://datacenter.eastmoney.com/securities/api/data/get?{urlencode(params)}"
+        async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+            response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+        
+        if not response or not response.success:
+            raise Exception(f"Failed to fetch company type data: {response.error if response else 'No response'}")
+
+        payload = json.loads(extract_content(response.content, "html > body > pre"))
+        if not payload.get('result') or not payload['result'].get('data'):
+            raise Exception("No company type data found")
+        
+        data_list = payload['result']['data']
+        
+        # 公司类型映射
+        company_type_map = {
+            "1": Industry.SECURITIES,
+            "2": Industry.INSURANCE, 
+            "3": Industry.BANK,
+            "4": Industry.GENERAL,
+        }
+        
+        for item in data_list:
+            secucode = item.get('SECUCODE', '')
+            company_type_code = item.get('COMPANY_TYPE', '4')
+            company_type = company_type_map.get(company_type_code, Industry.GENERAL)
+
+            if secucode:
+                symbol = Symbol.from_string(secucode)
+                stock_info = StockInfo(
+                    symbol=symbol,
+                    name="",  # 这里没有公司名称，需要从其他接口获取
+                    industry=company_type.value,  # 使用 Industry 枚举的值
+                )
+                all_stocks.append(stock_info)
+        
+        logging.info(f"Fetched {len(all_stocks)} company type records")
+        csv_dao.write_records(all_stocks)
+        return all_stocks
+
     async def fetch_stock_list(self, market_name: str, csv_dao: CSVGenericDAO[StockInfo], from_: str = 'eastmoney') -> List[StockInfo]:
         if from_ == 'eastmoney':
             return await self._fetch_stock_list_em(market_name, csv_dao)
@@ -601,6 +664,7 @@ class MarketDataFetcher:
                             type=Type.STOCK.value,
                         ),
                         name=name,
+                        industry=Industry.UNKNOWN.value,
                     ))
 
                 all_stocks.extend(page_stocks)
@@ -617,15 +681,15 @@ class MarketDataFetcher:
         csv_dao.write_records(all_stocks)
         return all_stocks
 
-    async def fetch_financial_data(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData], from_: str = 'eastmoney') -> List[FinancialData]:
+    async def fetch_financial_data(self, symbol: Symbol, company_type: str, csv_dao: CSVGenericDAO[FinancialData], from_: str = 'eastmoney') -> List[FinancialData]:
         if from_ == 'eastmoney':
-            return await self._fetch_financial_data_em(symbol, csv_dao)
+            return await self._fetch_financial_data_em(symbol, company_type, csv_dao)
         elif from_ == 'sina':
             raise NotImplementedError("Sina financial data fetching is not implemented yet.")
         else:
             raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
-    async def _fetch_financial_data_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
+    async def _fetch_financial_data_em(self, symbol: Symbol, company_type: str, csv_dao: CSVGenericDAO[FinancialData]) -> List[FinancialData]:
         """
         从东方财富新版接口获取财务三表（利润表、资产负债表、现金流量表）并按 REPORT_DATE 合并
         

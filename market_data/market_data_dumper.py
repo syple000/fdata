@@ -1,4 +1,4 @@
-from typing import List, Callable
+from typing import List, Dict, Callable
 import logging
 from contextlib import ExitStack, AsyncExitStack
 import argparse
@@ -23,6 +23,10 @@ class MarketDataDumper:
     async def dump_stock_list(self, market_names: List[str], csv_dao: CSVGenericDAO[StockInfo]):
         for market_name in market_names:
             await self.fetcher.fetch_stock_list(market_name, csv_dao)
+    
+    # 获取股票公司类型信息
+    async def dump_stock_company_type(self, csv_dao: CSVGenericDAO[StockInfo]):
+        await self.fetcher.fetch_stock_company_type(csv_dao)
 
     # 实时行情数据
     async def dump_realtime_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[RealTimeQuote], continue_signal: Callable[[], bool], send_event: Callable[[List[RealTimeQuote]], None]):
@@ -41,9 +45,9 @@ class MarketDataDumper:
                 await self.fetcher.fetch_historical_data(symbol, start_date, end_date, csv_dao, kline_type, adjust_type)
 
     # 历史财务数据
-    async def dump_financial_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[HistoricalData]):
+    async def dump_financial_data(self, symbols: List[Symbol], company_type_map: Dict[Symbol, str], csv_dao: CSVGenericDAO[HistoricalData]):
         for symbol in symbols:
-            await self.fetcher.fetch_financial_data(symbol, csv_dao)
+            await self.fetcher.fetch_financial_data(symbol, company_type_map.get(symbol, ""), csv_dao)
 
     # 股票详情quote
     async def dump_stock_quote(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[StockQuoteInfo]):
@@ -111,9 +115,22 @@ async def main(args):
             if function == 'stock_list':
                 if not args.market_names:
                     raise ValueError("Market names must be provided for stock list data")
+
+                company_type_df = None
+                async def get_company_type():
+                    nonlocal company_type_df
+                    if company_type_df is not None:
+                        return company_type_df
+                    tmp_file_name = f"tmp_{rand_str(16)}.csv"
+                    with CSVGenericDAO(tmp_file_name, StockInfo) as dao:
+                        await dumper.dump_stock_company_type(dao)
+                    company_type_df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
+                    os.remove(tmp_file_name)
+                    return company_type_df
+
                 for market_name in args.market_names:
                     dst_file_path = os.path.join(args.archive_directory, f'stock_list_{market_name}.csv')
-                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -121,6 +138,7 @@ async def main(args):
                         await dumper.dump_stock_list([market_name], dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
                     df.sort_values(by='symbol', inplace=True)
+                    df = pd.merge(df[['symbol', 'name']], (await get_company_type())[['symbol', 'industry']], on='symbol', how='left')
                     df.to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
             elif function == 'realtime':
@@ -190,7 +208,7 @@ async def main(args):
 
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
-                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -204,14 +222,31 @@ async def main(args):
             elif function == 'financial':
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for financial data")
+
+                company_type_map = None
+                async def get_company_type():
+                    nonlocal company_type_map
+                    if company_type_map is not None:
+                        return company_type_map
+                    tmp_file_name = f"tmp_{rand_str(16)}.csv"
+                    with CSVGenericDAO(tmp_file_name, StockInfo) as dao:
+                        await dumper.dump_stock_company_type(dao)
+                    company_type_df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
+                    company_type_map = {}
+                    for index, row in company_type_df.iterrows():
+                        company_type_map[Symbol.from_string(row['symbol'])] = row['industry']
+                    os.remove(tmp_file_name)
+                    return company_type_map
+
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'financial_data.csv')
-                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
+                    company_type_map = await get_company_type()  # 公司类型数据加载
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
                     with CSVGenericDAO(tmp_file_name, FinancialData) as dao:
-                        await dumper.dump_financial_data([symbol], dao)
+                        await dumper.dump_financial_data([symbol], company_type_map, dao)
                     df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
                     if not os.path.exists(os.path.dirname(dst_file_path)):
                         os.makedirs(os.path.dirname(dst_file_path))
@@ -222,7 +257,7 @@ async def main(args):
                     raise ValueError("Symbols must be provided for stock quote data")
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'stock_quote_{datetime.now().strftime("%Y-%m-%d")}.csv')
-                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -238,7 +273,7 @@ async def main(args):
                     raise ValueError("Symbols must be provided for dividend info data")
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'dividend_info.csv')
-                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"

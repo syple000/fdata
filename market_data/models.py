@@ -29,6 +29,15 @@ class Type(Enum):
     INDEX = 'INDEX'  # 指数
     ETF = 'ETF'      # 交易型基金
 
+class Industry(Enum):
+    """行业分类"""
+    BANK = '银行'
+    INSURANCE = '保险' 
+    SECURITIES = '证券'
+    GENERAL = '综合'
+
+    UNKNOWN = '未知'  # 未知行业
+
 @dataclass
 class Symbol:
     code: str # 编码
@@ -64,6 +73,7 @@ class Symbol:
 class StockInfo:
     symbol: Symbol
     name: str  # 名称
+    industry: str  # 行业
 
 @dataclass
 class RealTimeQuote:
