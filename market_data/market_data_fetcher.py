@@ -868,6 +868,13 @@ class MarketDataFetcher:
                 except (ValueError, TypeError):
                     return default
             
+            # 提取关键财务数据
+            parent_net_profit = safe_get_float(income, 'PARENT_NETPROFIT') or safe_get_float(income, 'NETPROFIT')
+            total_parent_equity = safe_get_float(balance, 'TOTAL_PARENT_EQUITY')
+            total_operate_income = safe_get_float(income, 'TOTAL_OPERATE_INCOME') or safe_get_float(income, 'OPERATE_INCOME')
+            total_operate_cost = safe_get_float(income, 'TOTAL_OPERATE_COST') or safe_get_float(income, 'OPERATE_COST')
+            operate_expense = safe_get_float(income, 'OPERATE_EXPENSE') # 银行/保险的营业支出
+
             financial_data = FinancialData(
                 symbol=symbol,
                 report_date=report_date,
@@ -880,6 +887,7 @@ class MarketDataFetcher:
                 current_liabilities=safe_get_float(balance, 'TOTAL_CURRENT_LIAB'),
                 non_current_liabilities=safe_get_float(balance, 'TOTAL_NONCURRENT_LIAB'),
                 total_equity=safe_get_float(balance, 'TOTAL_EQUITY'),
+                total_parent_equity=total_parent_equity,
                 fixed_asset=safe_get_float(balance, 'FIXED_ASSET'),
                 goodwill=safe_get_float(balance, 'GOODWILL'),
                 intangible_asset=safe_get_float(balance, 'INTANGIBLE_ASSET'),
@@ -908,25 +916,30 @@ class MarketDataFetcher:
                 trade_finasset_notfvtpl=safe_get_float(balance, 'TRADE_FINASSET_NOTFVTPL'),
                 derive_finasset=safe_get_float(balance, 'DERIVE_FINASSET'),
                 
-                # ========== 资产负债表 - 制造业/综合行业字段 ==========
+                # ========== 资产负债表 - 制造业/通用行业字段 ==========
                 inventory=safe_get_float(balance, 'INVENTORY'),
                 accounts_receivable=safe_get_float(balance, 'ACCOUNTS_RECE'),
+                note_accounts_rece=safe_get_float(balance, 'NOTE_ACCOUNTS_RECE'),
                 accounts_payable=safe_get_float(balance, 'ACCOUNTS_PAYABLE'),
+                note_accounts_payable=safe_get_float(balance, 'NOTE_ACCOUNTS_PAYABLE'),
                 short_loan=safe_get_float(balance, 'SHORT_LOAN'),
                 prepayment=safe_get_float(balance, 'PREPAYMENT'),
                 
                 # ========== 利润表 - 通用字段 ==========
-                total_revenue=safe_get_float(income, 'TOTAL_OPERATE_INCOME') or safe_get_float(income, 'OPERATE_INCOME'),
-                operating_cost=safe_get_float(income, 'TOTAL_OPERATE_COST') or safe_get_float(income, 'OPERATE_COST') or safe_get_float(income, 'OPERATE_EXPENSE'),
-                gross_profit=(safe_get_float(income, 'TOTAL_OPERATE_INCOME') or safe_get_float(income, 'OPERATE_INCOME')) - (safe_get_float(income, 'TOTAL_OPERATE_COST') or safe_get_float(income, 'OPERATE_COST') or safe_get_float(income, 'OPERATE_EXPENSE')),
+                total_revenue=total_operate_income,
+                operating_cost=total_operate_cost,
+                gross_profit=total_operate_income - (total_operate_cost or operate_expense),
                 operating_profit=safe_get_float(income, 'OPERATE_PROFIT'),
                 total_profit=safe_get_float(income, 'TOTAL_PROFIT'),
-                net_profit=safe_get_float(income, 'PARENT_NETPROFIT') or safe_get_float(income, 'NETPROFIT'),
+                net_profit=parent_net_profit,
+                deduct_parent_netprofit=safe_get_float(income, 'DEDUCT_PARENT_NETPROFIT'),
                 basic_eps=safe_get_float(income, 'BASIC_EPS'),
-                roe=(safe_get_float(income, 'PARENT_NETPROFIT') or safe_get_float(income, 'NETPROFIT')) / safe_get_float(balance, 'TOTAL_EQUITY') * 100 if safe_get_float(balance, 'TOTAL_EQUITY') != 0 else 0.0,
+                diluted_eps=safe_get_float(income, 'DILUTED_EPS'),
+                roe=parent_net_profit / total_parent_equity * 100 if total_parent_equity != 0 else 0.0,
                 operate_tax_add=safe_get_float(income, 'OPERATE_TAX_ADD'),
                 manage_expense=safe_get_float(income, 'MANAGE_EXPENSE') or safe_get_float(income, 'BUSINESS_MANAGE_EXPENSE'),
-                
+                other_compre_income=safe_get_float(income, 'PARENT_OCI'),
+
                 # ========== 利润表 - 银行业特有字段 ==========
                 interest_net_income=safe_get_float(income, 'INTEREST_NI'),
                 interest_income=safe_get_float(income, 'INTEREST_INCOME'),
@@ -947,8 +960,9 @@ class MarketDataFetcher:
                 security_underwrite_ni=safe_get_float(income, 'SECURITY_UNDERWRITE_NI'),
                 asset_manage_ni=safe_get_float(income, 'ASSET_MANAGE_NI'),
                 
-                # ========== 利润表 - 制造业/综合行业字段 ==========
+                # ========== 利润表 - 制造业/通用行业字段 ==========
                 sale_expense=safe_get_float(income, 'SALE_EXPENSE'),
+                research_expense=safe_get_float(income, 'RESEARCH_EXPENSE'),
                 finance_expense=safe_get_float(income, 'FINANCE_EXPENSE'),
                 asset_impairment_income=safe_get_float(income, 'ASSET_IMPAIRMENT_INCOME') or safe_get_float(income, 'ASSET_IMPAIRMENT_LOSS'),
                 other_income=safe_get_float(income, 'OTHER_INCOME'),
@@ -961,7 +975,8 @@ class MarketDataFetcher:
                 total_operate_outflow=safe_get_float(cashflow, 'TOTAL_OPERATE_OUTFLOW'),
                 total_invest_inflow=safe_get_float(cashflow, 'TOTAL_INVEST_INFLOW'),
                 total_invest_outflow=safe_get_float(cashflow, 'TOTAL_INVEST_OUTFLOW'),
-                
+                end_cce=safe_get_float(cashflow, 'END_CCE'),
+
                 # ========== 现金流量表 - 银行业特有字段 ==========
                 deposit_iofi_other=safe_get_float(cashflow, 'DEPOSIT_IOFI_OTHER'),
                 loan_advance_add=safe_get_float(cashflow, 'LOAN_ADVANCE_ADD'),
@@ -978,7 +993,7 @@ class MarketDataFetcher:
                 repo_business_add=safe_get_float(cashflow, 'REPO_BUSINESS_ADD'),
                 pay_agent_trade=safe_get_float(cashflow, 'PAY_AGENT_TRADE'),
                 
-                # ========== 现金流量表 - 制造业/综合行业字段 ==========
+                # ========== 现金流量表 - 制造业/通用行业字段 ==========
                 sales_services=safe_get_float(cashflow, 'SALES_SERVICES'),
                 buy_services=safe_get_float(cashflow, 'BUY_SERVICES'),
                 construct_long_asset=safe_get_float(cashflow, 'CONSTRUCT_LONG_ASSET'),

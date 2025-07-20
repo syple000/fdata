@@ -142,6 +142,7 @@ class FinancialData:
     current_liabilities: float           # 流动负债合计 - 通用
     non_current_liabilities: float       # 非流动负债合计 - 通用
     total_equity: float                  # 股东权益合计 - 通用
+    total_parent_equity: float           # 归属于母公司股东权益合计 - 通用
     fixed_asset: float                   # 固定资产净额 - 通用
     goodwill: float                      # 商誉 - 通用
     intangible_asset: float              # 无形资产 - 通用
@@ -173,7 +174,9 @@ class FinancialData:
     # ========== 资产负债表 - 制造业/综合行业字段 ==========
     inventory: float                     # 存货（制造业）
     accounts_receivable: float           # 应收账款（制造业）
+    note_accounts_rece: float            # 应收票据&账款（制造业）
     accounts_payable: float              # 应付账款（制造业）
+    note_accounts_payable: float         # 应付票据&账款（制造业）
     short_loan: float                    # 短期借款（制造业）
     prepayment: float                    # 预付款项（制造业）
 
@@ -184,10 +187,13 @@ class FinancialData:
     operating_profit: float              # 营业利润 - 通用
     total_profit: float                  # 利润总额 - 通用
     net_profit: float                    # 归属母公司净利润 - 通用
+    deduct_parent_netprofit: float       # 扣除非经常性损益后的净利润 - 通用
     basic_eps: float                     # 基本每股收益 - 通用
+    diluted_eps: float                   # 稀释每股收益 - 通用
     roe: float                           # 净资产收益率 - 通用
     operate_tax_add: float               # 营业税金及附加 - 通用
     manage_expense: float                # 管理费用 - 通用
+    other_compre_income: float           # 其他综合收益 - 通用
 
     # ========== 利润表 - 银行业特有字段 ==========
     interest_net_income: float           # 利息净收入（银行）
@@ -211,6 +217,7 @@ class FinancialData:
 
     # ========== 利润表 - 制造业/综合行业字段 ==========
     sale_expense: float                  # 销售费用（制造业）
+    research_expense: float              # 研发费用（制造业）
     finance_expense: float               # 财务费用 - 通用
     asset_impairment_income: float       # 资产减值损失（制造业）
     other_income: float                  # 其他收益 - 通用
@@ -223,6 +230,7 @@ class FinancialData:
     total_operate_outflow: float         # 经营活动现金流出小计 - 通用
     total_invest_inflow: float           # 投资活动现金流入小计 - 通用
     total_invest_outflow: float          # 投资活动现金流出小计 - 通用
+    end_cce: float                       # 期末现金及现金等价物 - 通用
 
     # ========== 现金流量表 - 银行业特有字段 ==========
     deposit_iofi_other: float            # 存放同业及其他金融机构款项净增加额（银行）
