@@ -130,7 +130,7 @@ async def main(args):
 
                 for market_name in args.market_names:
                     dst_file_path = os.path.join(args.archive_directory, f'stock_list_{market_name}.csv')
-                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -214,7 +214,7 @@ async def main(args):
                     async def dump_historical_data(kline_type):
                         for symbol in args.symbols:
                             dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
-                            if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                            if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
                                 logging.info(f"Skipping existing file: {dst_file_path}")
                                 continue
                             tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -248,7 +248,7 @@ async def main(args):
 
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'financial_data.csv')
-                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     company_type_map = await get_company_type()  # 公司类型数据加载
@@ -265,7 +265,7 @@ async def main(args):
                     raise ValueError("Symbols must be provided for stock quote data")
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'stock_quote_{datetime.now().strftime("%Y-%m-%d")}.csv')
-                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
@@ -281,7 +281,7 @@ async def main(args):
                     raise ValueError("Symbols must be provided for dividend info data")
                 for symbol in args.symbols:
                     dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'dividend_info.csv')
-                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
                         logging.info(f"Skipping existing file: {dst_file_path}")
                         continue
                     tmp_file_name = f"tmp_{rand_str(16)}.csv"
