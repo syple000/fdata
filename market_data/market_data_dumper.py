@@ -175,27 +175,30 @@ async def main(args):
                     raise ValueError("Symbols must be provided for historical data")
                 if not args.start_date or not args.end_date:
                     raise ValueError("Start date and end date must be provided for historical data")
-                if not args.kline_type:
+                if not args.kline_types:
                     raise ValueError("K-line type must be provided for historical data")
                 if not args.adjust_type:
                     raise ValueError("Adjust type must be provided for historical data")
 
-                if args.kline_type == '5m':
-                    kline_type = KLineType.MIN5
-                elif args.kline_type == '15m':
-                    kline_type = KLineType.MIN15
-                elif args.kline_type == '30m':
-                    kline_type = KLineType.MIN30
-                elif args.kline_type == '60m':
-                    kline_type = KLineType.MIN60
-                elif args.kline_type == 'daily':
-                    kline_type = KLineType.DAILY
-                elif args.kline_type == 'weekly':
-                    kline_type = KLineType.WEEKLY
-                elif args.kline_type == 'monthly':
-                    kline_type = KLineType.MONTHLY
-                else:
-                    raise ValueError(f"Invalid kline_type: {args.kline_type}")
+                kline_types = []
+                for kline_type in args.kline_types.split(','):
+                    kline_type = kline_type.strip()
+                    if kline_type == '5m':
+                        kline_types.append(KLineType.MIN5)
+                    elif kline_type == '15m':
+                        kline_types.append(KLineType.MIN15)
+                    elif kline_type == '30m':
+                        kline_types.append(KLineType.MIN30)
+                    elif kline_type == '60m':
+                        kline_types.append(KLineType.MIN60)
+                    elif kline_type == 'daily':
+                        kline_types.append(KLineType.DAILY)
+                    elif kline_type == 'weekly':
+                        kline_types.append(KLineType.WEEKLY)
+                    elif kline_type == 'monthly':
+                        kline_types.append(KLineType.MONTHLY)
+                    else:
+                        raise ValueError(f"Invalid kline_type: {kline_type}")
 
                 if args.adjust_type == 'none':
                     adjust_type = AdjustType.NONE
@@ -206,19 +209,24 @@ async def main(args):
                 else:
                     raise ValueError(f"Invalid adjust_type: {args.adjust_type}")
 
-                for symbol in args.symbols:
-                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
-                    if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
-                        logging.info(f"Skipping existing file: {dst_file_path}")
-                        continue
-                    tmp_file_name = f"tmp_{rand_str(16)}.csv"
-                    with CSVGenericDAO(tmp_file_name, HistoricalData) as dao:
-                        await dumper.dump_historical_data([symbol], args.start_date, args.end_date, dao, kline_type, adjust_type)
-                    df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
-                    if not os.path.exists(os.path.dirname(dst_file_path)):
-                        os.makedirs(os.path.dirname(dst_file_path))
-                    merge_data(dst_file_path, df, 'date', 'date').to_csv(dst_file_path, index=False, encoding='utf-8')
-                    os.remove(tmp_file_name)
+                tasks = []
+                for kline_type in kline_types:
+                    async def dump_historical_data(kline_type):
+                        for symbol in args.symbols:
+                            dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), f'historical_data_{kline_type.name}_{adjust_type.name}.csv')
+                            if os.path.exists(dst_file_path) and len(pd.read_csv(dst_file_path, encoding='utf-8', dtype=str)) > 0 and args.write_mode == 'skip_existing':
+                                logging.info(f"Skipping existing file: {dst_file_path}")
+                                continue
+                            tmp_file_name = f"tmp_{rand_str(16)}.csv"
+                            with CSVGenericDAO(tmp_file_name, HistoricalData) as dao:
+                                await dumper.dump_historical_data([symbol], args.start_date, args.end_date, dao, kline_type, adjust_type)
+                            df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
+                            if not os.path.exists(os.path.dirname(dst_file_path)):
+                                os.makedirs(os.path.dirname(dst_file_path))
+                            merge_data(dst_file_path, df, 'date', 'date').to_csv(dst_file_path, index=False, encoding='utf-8')
+                            os.remove(tmp_file_name)
+                    tasks.append(asyncio.create_task(dump_historical_data(kline_type)))
+                await asyncio.gather(*tasks)
             elif function == 'financial':
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for financial data")
@@ -305,7 +313,7 @@ if __name__ == "__main__":
     parser.add_argument('--duration', type=int, default=int(datetime.strptime(today + ' 16:00:00', '%Y-%m-%d %H:%M:%S').timestamp() - datetime.now().timestamp()), help="Duration in seconds for realtime data")
     parser.add_argument('--start_date', type=str, default='2001-01-01', help="Start date for historical data (YYYY-MM-DD)")
     parser.add_argument('--end_date', type=str, default=today, help="End date for historical data (YYYY-MM-DD)")
-    parser.add_argument('--kline_type', type=str, default='daily', choices=['5m', '15m', '30m', '60m', 'daily', 'weekly', 'monthly'], help="K-line type for historical data")
+    parser.add_argument('--kline_types', type=str, default='daily', help="K-line type for historical data")
     parser.add_argument('--adjust_type', type=str, default='forward', choices=['none', 'forward', 'backward'], help="Adjust type for historical data")
 
     args = parser.parse_args()
