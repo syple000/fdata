@@ -188,7 +188,7 @@ class MarketDataFetcher:
         else:
             raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
-    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
     async def _fetch_historical_data_sina(self, symbol: Symbol, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType) -> List[HistoricalData]:
         """
         从新浪获取股票和指数历史行情数据（5/15/30/60 min数据，未复权）
@@ -296,7 +296,7 @@ class MarketDataFetcher:
         csv_dao.write_records(historical_data)
         return historical_data
 
-    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
     async def _fetch_historical_data_em(self, symbol: Symbol, start_date: str, end_date: str, csv_dao: CSVGenericDAO[HistoricalData], klt: KLineType=KLineType.DAILY, fqt: AdjustType=AdjustType.NONE) -> List[HistoricalData]:
         """
         从东方财富获取股票和指数历史行情数据
@@ -379,7 +379,7 @@ class MarketDataFetcher:
         else:
             raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
-    @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
     async def _fetch_stock_quote_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[StockQuoteInfo]) -> StockQuoteInfo:
         """
         从东方财富获取股票详细quote信息
@@ -468,7 +468,7 @@ class MarketDataFetcher:
         page = 1
         
         while True:
-            @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+            @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
             async def _fetch_dividend_info():
                 params = {
                     "sortColumns": "PLAN_NOTICE_DATE",
@@ -547,6 +547,7 @@ class MarketDataFetcher:
         else:
             raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
 
+    @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
     async def _fetch_stock_company_type_em(self, csv_dao: CSVGenericDAO[StockInfo]) -> List[StockInfo]:
         """
         从东方财富获取股票公司类型信息
@@ -626,7 +627,7 @@ class MarketDataFetcher:
         
         page = 1
         while True:
-            @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+            @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
             async def _fetch_stock_list():
                 params = {
                     'np':    '1',
@@ -735,7 +736,7 @@ class MarketDataFetcher:
         page_size = 100
         
         # 获取资产负债表数据
-        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
         async def _fetch_balance_sheet():
             params = {
                 "type": apis['balance'][0],
@@ -760,7 +761,7 @@ class MarketDataFetcher:
             return payload.get('result', {}).get('data', [])
         
         # 获取利润表数据
-        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
         async def _fetch_income_statement():
             params = {
                 "type": apis['income'][0],
@@ -785,7 +786,7 @@ class MarketDataFetcher:
             return payload.get('result', {}).get('data', [])
         
         # 获取现金流量表数据
-        @async_retry(max_retries=5, delay=1, ignore_exceptions=True)
+        @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
         async def _fetch_cashflow_statement():
             params = {
                 "type": apis['cashflow'][0],

@@ -14,6 +14,7 @@ from fdata.spider.rate_limiter import RateLimiter, RateLimiterManager
 from fdata.market_data.market_data_fetcher import MarketDataFetcher
 from fdata.market_data.models import RealTimeQuote, KLineType, AdjustType, HistoricalData, Symbol, FinancialData, StockInfo, StockQuoteInfo, DividendInfo
 from fdata.utils.rand_str import rand_str
+from fdata.utils.retry import async_retry
 
 class MarketDataDumper:
     def __init__(self, fetcher: MarketDataFetcher):
@@ -111,6 +112,7 @@ async def main(args):
         fetcher = MarketDataFetcher(rate_limiter_mgr, spider)
         dumper = MarketDataDumper(fetcher)
 
+        @async_retry(max_retries=1, delay=1, ignore_exceptions=True)
         async def execute_function(function: str):
             if function == 'stock_list':
                 if not args.market_names:
@@ -141,7 +143,7 @@ async def main(args):
                     df = pd.merge(df[['symbol', 'name']], (await get_company_type())[['symbol', 'industry']], on='symbol', how='left')
                     df.to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
-            elif function == 'realtime':
+            elif function == 'realtime': # 生产环境请不要和其他功能一起运行，防止干扰
                 if not args.symbols:
                     raise ValueError("Symbols must be provided for realtime data")
                 if not args.duration:
