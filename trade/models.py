@@ -1,6 +1,6 @@
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict
 from dataclasses import dataclass
 
 # 定义证券交易：订单、成交、资金账户
@@ -124,11 +124,6 @@ class Position:
     quantity: Decimal  # 持仓数量
     available_quantity: Decimal  # 可用数量
     frozen_quantity: Decimal = Decimal('0')  # 冻结数量
-    cost_price: Decimal = Decimal('0')  # 成本价
-    market_price: Decimal = Decimal('0')  # 市价
-    unrealized_pnl: Decimal = Decimal('0')  # 浮动盈亏
-    realized_pnl: Decimal = Decimal('0')  # 已实现盈亏
-    update_time: str = None
 
 @dataclass
 class Account:
@@ -145,101 +140,4 @@ class Account:
     create_time: str = None
     update_time: str = None
 
-class TradingSystem:
-    """交易系统"""
-    
-    def __init__(self):
-        self.orders = {}
-        self.trades = {}
-        self.accounts = {}
-        self.positions = {}
-    
-    def submit_order(self, order: Order) -> bool:
-        """提交订单"""
-        # 风控检查
-        if not self._risk_check(order):
-            order.status = OrderStatus.REJECTED
-            return False
-        
-        # 冻结资金/股票
-        if not self._freeze_assets(order):
-            order.status = OrderStatus.REJECTED
-            return False
-        
-        order.status = OrderStatus.SUBMITTED
-        self.orders[order.order_id] = order
-        return True
-    
-    def cancel_order(self, order_id: str) -> bool:
-        """撤销订单"""
-        if order_id not in self.orders:
-            return False
-        
-        order = self.orders[order_id]
-        if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]:
-            return False
-        
-        # 解冻资金/股票
-        self._unfreeze_assets(order)
-        order.status = OrderStatus.CANCELLED
-        order.update_time = str.now()
-        return True
-    
-    def execute_trade(self, order_id: str, quantity: Decimal, price: Decimal) -> Trade:
-        """执行成交"""
-        order = self.orders[order_id]
-        
-        # 创建成交记录
-        trade = Trade(
-            trade_id=f"T{str.now().strftime('%Y%m%d%H%M%S')}",
-            order_id=order_id,
-            symbol=order.symbol,
-            side=order.side,
-            quantity=quantity,
-            price=price,
-            amount=quantity * price,
-            account_id=order.account_id
-        )
-        
-        # 更新订单状态
-        order.filled_quantity += quantity
-        order.remaining_quantity -= quantity
-        
-        if order.remaining_quantity <= 0:
-            order.status = OrderStatus.FILLED
-        else:
-            order.status = OrderStatus.PARTIALLY_FILLED
-        
-        order.update_time = str.now()
-        
-        # 更新持仓和资金
-        self._update_position(trade)
-        self._update_account(trade)
-        
-        self.trades[trade.trade_id] = trade
-        return trade
-    
-    def _risk_check(self, order: Order) -> bool:
-        """风控检查"""
-        # 实现具体的风控逻辑
-        return True
-    
-    def _freeze_assets(self, order: Order) -> bool:
-        """冻结资产"""
-        # 实现资金/股票冻结逻辑
-        return True
-    
-    def _unfreeze_assets(self, order: Order):
-        """解冻资产"""
-        # 实现资产解冻逻辑
-        pass
-    
-    def _update_position(self, trade: Trade):
-        """更新持仓"""
-        # 实现持仓更新逻辑
-        pass
-    
-    def _update_account(self, trade: Trade):
-        """更新账户"""
-        # 实现账户更新逻辑
-        pass
+    positions: Dict[str, Position] = None
