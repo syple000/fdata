@@ -2,8 +2,6 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict
 from dataclasses import dataclass, field
-import random
-from datetime import datetime
 
 class OrderType(Enum):
     """订单类型"""
@@ -120,12 +118,6 @@ class Order:
         if len(self.account_id) <= 0:
             raise ValueError("账户ID不能为空")
         
-        # 赋值时间/剩余quantity
-        if self.create_time is None:
-            self.create_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        if self.update_time is None:
-            self.update_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
         self.remaining_quantity = self.quantity
     
 @dataclass
@@ -160,10 +152,6 @@ class Trade:
             raise ValueError("证券代码不能为空")
         if len(self.account_id) <= 0:
             raise ValueError("账户ID不能为空")
-
-        # 赋值时间
-        if self.trade_time is None:
-            self.trade_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
    
 @dataclass
 class Position:

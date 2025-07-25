@@ -1,8 +1,10 @@
 
 from .models import *
+from .clock import Clock, VClock
+from fdata.dao.csv_dao import CSVGenericDAO
 
+import os
 from typing import Dict
-from datetime import datetime
 import random
 from decimal import Decimal
 
@@ -11,10 +13,28 @@ COMMISSION_RATE = Decimal('0.0001')  # 手续费率
 TAX_RATE = Decimal('0.0005')  # 印花税率
 
 class TradingSystem:
-    def __init__(self, account: Account):
+    def __init__(self, account: Account, clock: Clock):
         self.account = account
+        self.clock = clock
         self.orders: Dict[str, Order] = {}
         self.trades: Dict[str, Trade] = {}
+
+    def end_day(self, order_dao: CSVGenericDAO[Order], trade_dao: CSVGenericDAO[Trade]): # 关闭所有未结束订单，对订单交易进行数据落地
+        orders = []
+        for order in self.orders.values():
+            if order.status != OrderStatus.FILLED and order.status != OrderStatus.CANCELLED and order.status != OrderStatus.REJECTED:
+                self.cancel_order(order.order_id)
+            orders.append(order)
+        orders.sort(key=lambda x: x.create_time)
+        order_dao.write_records(orders)
+        self.orders = {}
+
+        trades = []
+        for trade in self.trades.values():
+            trades.append(trade)
+        trades.sort(key=lambda x: x.trade_time)
+        trade_dao.write_records(trades)
+        self.trades = {}
 
     def submit_order(self, order: Order) -> bool:
         """提交订单"""
@@ -23,6 +43,8 @@ class TradingSystem:
             order.status = OrderStatus.REJECTED
             return False
         
+        order.create_time = self.clock.get_time()
+        order.update_time = self.clock.get_time()
         order.status = OrderStatus.SUBMITTED
         self.orders[order.order_id] = order
         return True
@@ -39,7 +61,7 @@ class TradingSystem:
         # 解冻资金/股票
         self._unfreeze_assets(order)
         order.status = OrderStatus.CANCELLED
-        order.update_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        order.update_time = self.clock.get_time()
         return True
     
     def execute_trade(self, order_id: str, quantity: Decimal, price: Decimal) -> Trade:
@@ -48,7 +70,7 @@ class TradingSystem:
         
         # 创建成交记录
         trade = Trade(
-            trade_id=f"T{datetime.now().strftime('%Y%m%d%H%M%S')}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
+            trade_id=f"T{self.clock.get_ts()}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
             order_id=order_id,
             symbol=order.symbol,
             side=order.side,
@@ -57,12 +79,14 @@ class TradingSystem:
             amount=quantity * price,
             commission=quantity * price * COMMISSION_RATE,
             tax=quantity * price * TAX_RATE if order.side == OrderSide.SELL else Decimal('0'),
+            trade_time=self.clock.get_time(),
             account_id=order.account_id
         )
 
         # 更新订单、持仓和资金
         self._update(order, trade)
         
+        trade.status = TradeStatus.CONFIRMED
         self.trades[trade.trade_id] = trade
         return trade
     
@@ -110,7 +134,7 @@ class TradingSystem:
             order.status = OrderStatus.FILLED
         else:
             order.status = OrderStatus.PARTIALLY_FILLED
-        order.update_time = str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        order.update_time = str(self.clock.get_time())
 
         # 更新账户数据
         if trade.side == OrderSide.BUY:
@@ -161,7 +185,8 @@ if __name__ == '__main__':
         available_quantity=Decimal('200'),
         frozen_quantity=Decimal('0')
     )
-    ts = TradingSystem(account)
+    clock = VClock(time='2023-10-01 09:30:00')  # 模拟时间
+    ts = TradingSystem(account, clock)
 
     def assert_equal(actual, expected, msg_prefix=""):
         assert actual == expected, f"{msg_prefix}期望值{expected}，实际值{actual}，差异{abs(actual - expected)}"
@@ -189,7 +214,6 @@ if __name__ == '__main__':
         status=None,
         filled_quantity=Decimal('0'),
         remaining_quantity=Decimal('100'),
-        update_time=None
     )
     ok = ts.submit_order(order_b1)
     assert ok, f"Expected order submission success, got {ok}"
@@ -213,7 +237,6 @@ if __name__ == '__main__':
         status=None,
         filled_quantity=Decimal('0'),
         remaining_quantity=Decimal('3000'),
-        update_time=None
     )
     ok2 = ts.submit_order(order_b2)
     assert not ok2, f"Expected order submission failure due to insufficient funds, got {ok2}"
@@ -237,7 +260,6 @@ if __name__ == '__main__':
         status=None,
         filled_quantity=Decimal('0'),
         remaining_quantity=Decimal('50'),
-        update_time=None
     )
     ok3 = ts.submit_order(order_s1)
     assert ok3, f"Expected SELL 50@15 submission success, got {ok3}"
@@ -263,7 +285,6 @@ if __name__ == '__main__':
         status=None,
         filled_quantity=Decimal('0'),
         remaining_quantity=Decimal('1000'),
-        update_time=None
     )
     ok4 = ts.submit_order(order_s2)
     assert not ok4, f"Expected order submission failure due to insufficient holdings, got {ok4}"
@@ -316,7 +337,6 @@ if __name__ == '__main__':
         status=None,
         filled_quantity=Decimal('0'),
         remaining_quantity=Decimal('50'),
-        update_time=None
     )
     # 提交订单
     ok5 = ts.submit_order(order_b3)
@@ -347,3 +367,28 @@ if __name__ == '__main__':
     assert_equal(pos2.quantity, Decimal('20'), "持仓总量")
     assert_equal(pos2.frozen_quantity, Decimal('20'), "冻结持仓")
     assert_equal(pos2.available_quantity, Decimal('0'), "可用持仓")
+
+    # 测试挂单，交易日结束自动取消
+    order_b4 = Order(
+        order_id='B4',
+        account_id='ACC1',
+        symbol='000002.SZ',
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Decimal('50'),
+        price=Decimal('20'),
+        status=None,
+        filled_quantity=Decimal('0'),
+        remaining_quantity=Decimal('50'),
+    )
+    ts.submit_order(order_b4)
+    print(ts.account)
+
+    if os.path.exists('orders.csv'):
+        os.remove('orders.csv')
+    if os.path.exists('trades.csv'):
+        os.remove('trades.csv')
+    with CSVGenericDAO[Order]('orders.csv', Order) as order_dao, \
+         CSVGenericDAO[Trade]('trades.csv', Trade) as trade_dao:
+        ts.end_day(order_dao, trade_dao)
+    print(ts.account)
