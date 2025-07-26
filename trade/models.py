@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Optional, Dict
 from dataclasses import dataclass, field
 
+from .config import *
+
 class OrderType(Enum):
     """订单类型"""
     MARKET = "市价单"
@@ -157,9 +159,29 @@ class Trade:
 class Position:
     """持仓模型"""
     symbol: str
-    quantity: Decimal  # 持仓数量
-    available_quantity: Decimal  # 可用数量
+    quantity: Decimal              # 持仓数量
+    available_quantity: Decimal    # 可用数量
     frozen_quantity: Decimal = Decimal('0')  # 冻结数量
+
+    cost: Decimal = Decimal('0')   # 持仓成本
+
+    def get_market_value(self, current_price: Decimal) -> Decimal:
+        """计算持仓市值"""
+        return self.quantity * current_price
+
+    def get_unrealized_pnl(self, current_price: Decimal) -> Decimal:
+        """计算未实现盈亏"""
+        if self.quantity == 0:
+            return Decimal('0')
+        return current_price * self.quantity * (1 - COMMISSION_RATE - TAX_RATE) - self.cost
+
+    def get_unrealized_pnl_rate(self, current_price: Decimal) -> Decimal:
+        """计算未实现盈亏率"""
+        if self.cost == 0:
+            return Decimal('0')
+        unrealized_pnl = self.get_unrealized_pnl(current_price)
+        return unrealized_pnl / self.cost
+
 
 @dataclass
 class Account:
@@ -169,11 +191,24 @@ class Account:
     available_balance: Decimal  = Decimal('0') # 可用余额
     frozen_balance: Decimal = Decimal('0')  # 冻结资金
 
-    market_value: Decimal = Decimal('0')  # 持仓市值
-    total_asset: Decimal = Decimal('0')  # 总资产
-    profit_loss: Decimal = Decimal('0')  # 盈亏
-
-    commission_total: Decimal = Decimal('0')  # 累计手续费
-    tax_total: Decimal = Decimal('0')  # 累计税费
-
     positions: Dict[str, Position] = field(default_factory=dict)
+
+    def get_market_value(self, current_price: Decimal) -> Decimal:
+        """计算账户持仓市值"""
+        sum_market_value = Decimal('0')
+        for position in self.positions.values():
+            sum_market_value += position.get_market_value(current_price)
+        return sum_market_value
+
+    def get_total_asset(self, current_price: Decimal) -> Decimal:
+        """计算账户总资产"""
+        self.market_value = self.get_market_value(current_price)
+        self.total_asset = self.balance + self.market_value
+        return self.total_asset
+
+    def get_profit_loss(self, current_price: Decimal) -> Decimal:
+        """计算账户盈亏"""
+        self.profit_loss = Decimal('0')
+        for position in self.positions.values():
+            self.profit_loss += position.get_unrealized_pnl(current_price)
+        return self.profit_loss

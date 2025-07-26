@@ -1,5 +1,6 @@
 
 from .models import *
+from .config import *
 from .clock import Clock, VClock
 from fdata.dao.csv_dao import CSVGenericDAO
 
@@ -7,10 +8,6 @@ import os
 from typing import Dict
 import random
 from decimal import Decimal
-
-# 定义证券交易：订单、成交、资金账户
-COMMISSION_RATE = Decimal('0.0001')  # 手续费率
-TAX_RATE = Decimal('0.0005')  # 印花税率
 
 class TradingSystem:
     def __init__(self, account: Account, clock: Clock):
