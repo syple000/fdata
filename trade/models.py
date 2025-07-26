@@ -193,22 +193,26 @@ class Account:
 
     positions: Dict[str, Position] = field(default_factory=dict)
 
-    def get_market_value(self, current_price: Decimal) -> Decimal:
+    def get_market_value(self, current_price: Dict[str, Decimal]) -> Decimal:
         """计算账户持仓市值"""
         sum_market_value = Decimal('0')
-        for position in self.positions.values():
-            sum_market_value += position.get_market_value(current_price)
+        for symbol, position in self.positions.items():
+            if symbol not in current_price:
+                raise ValueError(f"当前价格中缺少证券代码: {symbol}")
+            sum_market_value += position.get_market_value(current_price[symbol])
         return sum_market_value
 
-    def get_total_asset(self, current_price: Decimal) -> Decimal:
+    def get_total_asset(self, current_price: Dict[str, Decimal]) -> Decimal:
         """计算账户总资产"""
-        self.market_value = self.get_market_value(current_price)
-        self.total_asset = self.balance + self.market_value
-        return self.total_asset
+        market_value = self.get_market_value(current_price)
+        total_asset = self.balance + market_value
+        return total_asset
 
-    def get_profit_loss(self, current_price: Decimal) -> Decimal:
+    def get_profit_loss(self, current_price: Dict[str, Decimal]) -> Decimal:
         """计算账户盈亏"""
-        self.profit_loss = Decimal('0')
-        for position in self.positions.values():
-            self.profit_loss += position.get_unrealized_pnl(current_price)
-        return self.profit_loss
+        profit_loss = Decimal('0')
+        for symbol, position in self.positions.items():
+            if symbol not in current_price:
+                raise ValueError(f"当前价格中缺少证券代码: {symbol}")
+            profit_loss += position.get_unrealized_pnl(current_price[symbol])
+        return profit_loss

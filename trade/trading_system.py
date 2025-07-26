@@ -145,16 +145,18 @@ class TradingSystem:
 
             self.account.positions[trade.symbol].quantity += trade.quantity
             self.account.positions[trade.symbol].frozen_quantity += trade.quantity
+            self.account.positions[trade.symbol].cost += trade.amount + trade.commission + trade.tax
 
             self.account.frozen_balance = self.account.frozen_balance - (order.price * trade.quantity * (1 + COMMISSION_RATE))
-            self.account.available_balance = self.account.available_balance + (order.price * trade.quantity * (1 + COMMISSION_RATE)) - trade.amount - trade.commission
-            self.account.balance = self.account.balance - trade.amount - trade.commission 
+            self.account.available_balance = self.account.available_balance + (order.price * trade.quantity * (1 + COMMISSION_RATE)) - trade.amount - trade.commission - trade.tax
+            self.account.balance = self.account.balance - trade.amount - trade.commission  - trade.tax
             assert self.account.available_balance >= 0, "Available balance cannot be negative"
             assert self.account.frozen_balance >= 0, "Frozen balance cannot be negative"
             assert self.account.balance >= 0, "Account balance cannot be negative"
         elif trade.side == OrderSide.SELL:
             self.account.positions[trade.symbol].quantity -= trade.quantity
             self.account.positions[trade.symbol].frozen_quantity -= trade.quantity
+            self.account.positions[trade.symbol].cost -= (trade.amount - trade.commission - trade.tax)
             assert self.account.positions[trade.symbol].quantity >= 0, "Position quantity cannot be negative"
             assert self.account.positions[trade.symbol].frozen_quantity >= 0, "Frozen position quantity cannot be negative"
 
@@ -180,7 +182,8 @@ if __name__ == '__main__':
         symbol='000001.SZ',
         quantity=Decimal('200'),
         available_quantity=Decimal('200'),
-        frozen_quantity=Decimal('0')
+        frozen_quantity=Decimal('0'),
+        cost=Decimal('2000')
     )
     clock = VClock(time='2023-10-01 09:30:00')  # 模拟时间
     ts = TradingSystem(account, clock)
@@ -295,6 +298,7 @@ if __name__ == '__main__':
 
     # 5) 执行买单成交
     if order_b1.status == OrderStatus.SUBMITTED:
+        assert_equal(account.positions['000001.SZ'].cost, Decimal('2000'), "持仓成本") 
         trade_b = ts.execute_trade(order_b1.order_id, quantity=Decimal('100'), price=Decimal('10'))
         assert order_b1.status == OrderStatus.FILLED, f"Expected order status FILLED, got {order_b1.status}"
         assert_equal(trade_b.quantity, Decimal('100'), "成交数量")
@@ -303,6 +307,7 @@ if __name__ == '__main__':
         assert_equal(account.available_balance, Decimal('18999.9'), "可用余额")
         assert_equal(account.frozen_balance, Decimal('0'), "冻结余额")
         pos = account.positions['000001.SZ']
+        assert_equal(pos.cost, Decimal('3000.1'), "持仓成本")
         assert_equal(pos.quantity, Decimal('300'), "持仓总量")
         assert_equal(pos.available_quantity, Decimal('150'), "可用持仓")
         assert_equal(pos.frozen_quantity, Decimal('150'), "冻结持仓")
@@ -318,6 +323,7 @@ if __name__ == '__main__':
         assert_equal(account.frozen_balance, Decimal('0'), "冻结余额")
 
         pos = account.positions['000001.SZ']
+        assert_equal(pos.cost, Decimal('2300.52'), "持仓成本")
         assert_equal(pos.quantity, Decimal('250'), "持仓总量")
         assert_equal(pos.available_quantity, Decimal('150'), "可用持仓")
         assert_equal(pos.frozen_quantity, Decimal('100'), "冻结持仓")
@@ -361,6 +367,7 @@ if __name__ == '__main__':
     assert_equal(account.balance, Decimal('19339.444'), "余额")
     # 持仓情况：已成交 20 股，冻结持仓 20
     pos2 = account.positions['000002.SZ']
+    assert_equal(pos2.cost, Decimal('360.036'), "持仓成本")
     assert_equal(pos2.quantity, Decimal('20'), "持仓总量")
     assert_equal(pos2.frozen_quantity, Decimal('20'), "冻结持仓")
     assert_equal(pos2.available_quantity, Decimal('0'), "可用持仓")
@@ -379,7 +386,6 @@ if __name__ == '__main__':
         remaining_quantity=Decimal('50'),
     )
     ts.submit_order(order_b4)
-    print(ts.account)
 
     if os.path.exists('orders.csv'):
         os.remove('orders.csv')
@@ -388,4 +394,15 @@ if __name__ == '__main__':
     with CSVGenericDAO[Order]('orders.csv', Order) as order_dao, \
          CSVGenericDAO[Trade]('trades.csv', Trade) as trade_dao:
         ts.end_day(order_dao, trade_dao)
+
     print(ts.account)
+    current_price = {
+        '000001.SZ': Decimal('12'),
+        '000002.SZ': Decimal('19')
+    }
+    print(f'market_value: {ts.account.get_market_value(current_price)}')
+    print(f'total_asset: {ts.account.get_total_asset(current_price)}')
+    print(f'profit_loss: {ts.account.get_profit_loss(current_price)}')
+    for pos in ts.account.positions.values():
+        print(f'{pos.symbol} - 市值: {pos.get_market_value(current_price[pos.symbol])}, '
+              f'盈亏: {pos.get_unrealized_pnl(current_price[pos.symbol])}')
