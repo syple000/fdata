@@ -298,10 +298,10 @@ class DividendInfo:
     ex_dividend_date: str            # 除权除息日
     progress: str                    # 方案进度
     latest_notice_date: str          # 最新公告日期
-    total_transfer_ratio: float      # 送转总比例
-    bonus_ratio: float               # 送股比例
-    transfer_ratio: float            # 转股比例
-    cash_dividend_ratio: float       # 现金分红比例
+    total_transfer_ratio: float      # 送转总比例（每10股）
+    bonus_ratio: float               # 送股比例（每10股）
+    transfer_ratio: float            # 转股比例（每10股）
+    cash_dividend: float             # 现金分红（每10股）
     dividend_yield: float            # 股息率(%)
 
 # 传入股票code，返回对应的交易所

@@ -517,7 +517,7 @@ class MarketDataFetcher:
                         total_transfer_ratio=float(item.get('BONUS_IT_RATIO') or 0),
                         bonus_ratio=float(item.get('BONUS_RATIO') or 0),
                         transfer_ratio=float(item.get('IT_RATIO') or 0),
-                        cash_dividend_ratio=float(item.get('PRETAX_BONUS_RMB') or 0),
+                        cash_dividend=float(item.get('PRETAX_BONUS_RMB') or 0),
                         dividend_yield=float(item.get('DIVIDENT_RATIO') or 0) * 100,  # 转换为百分比
                     )
                     page_dividends.append(dividend_info)
