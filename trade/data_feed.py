@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Dict, List
 import pandas as pd
 import os
@@ -16,9 +17,36 @@ def parse_ts(time_str: str) -> int:
     else:
         raise ValueError(f"Unsupported time format: {time_str}")
 
-# 支持两种模式：
-# 1. 实时模式（R）：从实时数据源获取数据
-# 2. 回测模式（V）：从历史数据文件中读取数据
+def forward_adjust(kline_df: pd.DataFrame, dividend_df: pd.DataFrame) -> pd.DataFrame:
+    # 保护原kline df
+    kline_df = kline_df.copy()
+
+    i = 0
+    while i < len(dividend_df):
+        dividend_row = dividend_df.iloc[i]
+
+        total_transfer_ratio = Decimal(str(dividend_row['total_transfer_ratio']))
+        cash_dividend = Decimal(str(dividend_row['cash_dividend']))
+
+        def recalc(x):
+            x = Decimal(x)
+            x = x*Decimal('10')/(Decimal('10')+total_transfer_ratio) - cash_dividend/(Decimal('10')+total_transfer_ratio)
+            return str(x)
+
+        ex_dividend_date = parse_ts(dividend_row['ex_dividend_date'])
+        
+        # 找到除权除息日期之前的所有数据重计算（turnover复权后无效）
+        mask = kline_df['date'].apply(parse_ts) < ex_dividend_date
+        kline_df.loc[mask, 'open_price'] = kline_df.loc[mask, 'open_price'].apply(recalc)
+        kline_df.loc[mask, 'close_price'] = kline_df.loc[mask, 'close_price'].apply(recalc)
+        kline_df.loc[mask, 'high_price'] = kline_df.loc[mask, 'high_price'].apply(recalc)
+        kline_df.loc[mask, 'low_price'] = kline_df.loc[mask, 'low_price'].apply(recalc)
+
+        i += 1
+    
+    return kline_df
+    
+
 class BacktestDataFeed:
     # 在回溯场景下，文件有所有信息（包括回溯时间后的数据），依赖时间游标控制可见性
     class IndexWrapper:
@@ -106,3 +134,8 @@ if __name__ == "__main__":
 
     for date in DateRange('2025-06-01', datetime.now().strftime("%Y-%m-%d")):
         _ = data_feed.get(date)
+
+    kline_df = pd.read_csv(os.path.join(archive_path, '000001.SZ', 'historical_data_DAILY_NONE.csv'), dtype=str)
+    dividend_df = pd.read_csv(os.path.join(archive_path, '000001.SZ', 'dividend_info.csv'), dtype=str)
+    adjusted_kline_df = forward_adjust(kline_df, dividend_df)
+    adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_DAILY_FORWARD.csv'), index=False)
