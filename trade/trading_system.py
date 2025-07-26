@@ -8,11 +8,13 @@ import os
 from typing import Dict
 import random
 from decimal import Decimal
+import pandas as pd
 
 class TradingSystem:
-    def __init__(self, account: Account, clock: Clock):
+    def __init__(self, account: Account, clock: Clock, dividend_infos: Dict[str, pd.DataFrame]):
         self.account = account
         self.clock = clock
+        self.dividend_infos = dividend_infos
         self.orders: Dict[str, Order] = {}
         self.trades: Dict[str, Trade] = {}
 
@@ -86,7 +88,36 @@ class TradingSystem:
         trade.status = TradeStatus.CONFIRMED
         self.trades[trade.trade_id] = trade
         return trade
-    
+
+    # 交易日开始，计算 分红、送/配股 更新仓位和资金
+    def start_day(self):
+        date = self.clock.get_date()
+
+        # 遍历账户持仓，进行分红送配股计算
+        for symbol, position in self.account.positions.items():
+            if symbol in self.dividend_infos:
+                dividend_info = self.dividend_infos[symbol]
+                # 获取分红信息
+                dividend_info = dividend_info[dividend_info['ex_dividend_date'] == date]
+                if dividend_info.empty:
+                    continue
+                dividend_row = dividend_info.iloc[0]
+
+                # 计算分红(10股分红n元)，直接体现到资金与持仓成本
+                cash_dividend = Decimal(str(dividend_row['cash_dividend']))
+                if cash_dividend > 0:
+                    dividend_amount = (position.quantity / Decimal(10)) * cash_dividend
+                    self.account.available_balance += dividend_amount
+                    self.account.balance += dividend_amount
+                    position.cost -= dividend_amount
+ 
+                # 计算送配股(10股送转n股)，直接体现到持仓
+                total_transfer_ratio = Decimal(str(dividend_row['total_transfer_ratio']))
+                if total_transfer_ratio > 0:
+                    dividend_quantity = (position.quantity / Decimal(10)) * total_transfer_ratio
+                    position.quantity += dividend_quantity
+                    position.available_quantity += dividend_quantity
+   
     def _freeze_assets(self, order: Order) -> bool:
         if order.side == OrderSide.BUY:
             required_funds = order.remaining_quantity * order.price * (1 + COMMISSION_RATE)
@@ -173,20 +204,26 @@ if __name__ == '__main__':
     # 初始化账户：2w 资金，持仓 000001.SZ 200 股
     account = Account(
         account_id='ACC1',
-        balance=Decimal('20000'),
-        available_balance=Decimal('20000'),
+        balance=Decimal('19968'),
+        available_balance=Decimal('19968'),
         frozen_balance=Decimal('0'),
         positions={}
     )
     account.positions['000001.SZ'] = Position(
         symbol='000001.SZ',
-        quantity=Decimal('200'),
-        available_quantity=Decimal('200'),
+        quantity=Decimal('160'),
+        available_quantity=Decimal('160'),
         frozen_quantity=Decimal('0'),
-        cost=Decimal('2000')
+        cost=Decimal('2032')
     )
     clock = VClock(time='2023-10-01 09:30:00')  # 模拟时间
-    ts = TradingSystem(account, clock)
+    ts = TradingSystem(account, clock, {'000001.SZ': pd.DataFrame({
+        'ex_dividend_date': ['2023-10-01'],
+        'total_transfer_ratio': [2.5],
+        'cash_dividend': [2],
+    })})
+    ts.start_day()  # 开始交易日
+
 
     def assert_equal(actual, expected, msg_prefix=""):
         assert actual == expected, f"{msg_prefix}期望值{expected}，实际值{actual}，差异{abs(actual - expected)}"

@@ -216,3 +216,24 @@ class Account:
                 raise ValueError(f"当前价格中缺少证券代码: {symbol}")
             profit_loss += position.get_unrealized_pnl(current_price[symbol])
         return profit_loss
+
+@dataclass
+class Bar:
+    """K线数据模型"""
+    symbol: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+    timestamp: str  # 时间戳，格式为 'YYYY-MM-DD HH:MM:SS'
+
+    def __post_init__(self):
+        if self.open <= 0 or self.high <= 0 or self.low <= 0 or self.close <= 0:
+            raise ValueError("开盘价、最高价、最低价和收盘价必须大于0")
+        if self.volume < 0:
+            raise ValueError("成交量不能为负数")
+        if len(self.symbol) <= 0:
+            raise ValueError("证券代码不能为空")
+        if len(self.timestamp) <= 0:
+            raise ValueError("时间戳不能为空")

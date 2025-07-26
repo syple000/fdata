@@ -14,6 +14,9 @@ class Clock(ABC): # 接口
     @abstractmethod
     def get_ts(self):
         raise NotImplementedError("get_ts is not implemented")
+    @abstractmethod
+    def get_date(self):
+        raise NotImplementedError("get_date is not implemented")
 
 class RClock(Clock):
     def __init__(self):
@@ -30,6 +33,9 @@ class RClock(Clock):
 
     def get_ts(self):
         return int(datetime.now().timestamp())
+
+    def get_date(self):
+        return datetime.now().strftime('%Y-%m-%d')
     
 class VClock(Clock):
     def __init__(self, time: str):
@@ -46,3 +52,6 @@ class VClock(Clock):
 
     def get_ts(self):
         return int(datetime.strptime(self._time, '%Y-%m-%d %H:%M:%S').timestamp())
+
+    def get_date(self):
+        return datetime.strptime(self._time, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
