@@ -98,7 +98,15 @@ class BacktestDataFeed:
         # 3. 加载k线数据
         if self._kline_type == KLineType.DAILY:
             kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.DAILY.name}_NONE.csv'), dtype=str)
-        else: # 暂不支持
+        elif self._kline_type == KLineType.MIN5:
+            kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.MIN5.name}_NONE.csv'), dtype=str)
+        elif self._kline_type == KLineType.MIN15:
+            kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.MIN15.name}_NONE.csv'), dtype=str)
+        elif self._kline_type == KLineType.MIN30:
+            kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.MIN30.name}_NONE.csv'), dtype=str)
+        elif self._kline_type == KLineType.MIN60:
+            kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.MIN60.name}_NONE.csv'), dtype=str)
+        else:
             raise ValueError(f"Unsupported kline type: {self._kline_type}")
 
         return {
@@ -108,7 +116,19 @@ class BacktestDataFeed:
         }
 
     def __iter__(self):
-        date_range = DateRange(self._start_date, self._end_date)
+        if self._kline_type == KLineType.DAILY:
+            date_range = DateRange(self._start_date, self._end_date, 24*3600)
+        elif self._kline_type == KLineType.MIN5:
+            date_range = DateRange(self._start_date, self._end_date, 5*60)
+        elif self._kline_type == KLineType.MIN15:
+            date_range = DateRange(self._start_date, self._end_date, 15*60)
+        elif self._kline_type == KLineType.MIN30:
+            date_range = DateRange(self._start_date, self._end_date, 30*60)
+        elif self._kline_type == KLineType.MIN60:
+            date_range = DateRange(self._start_date, self._end_date, 60*60)
+        else:
+            raise ValueError(f"Unsupported kline type: {self._kline_type}")
+
         pre_data = None
         for date in date_range:
             logging.info(f"Processing date: {date}")
@@ -184,3 +204,11 @@ if __name__ == "__main__":
 
     adjusted_kline_df = data['symbol_data']['000001.SZ']['forward_adjusted_kline_data']
     adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_DAILY_FORWARD.csv'), index=False)
+
+    # 测试30min数据读取
+    data_feed = BacktestDataFeed('2025-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols, kline_type=KLineType.MIN30)
+    for data in data_feed:
+        if data['date'] == '2025-06-12 10:00:00':
+            break
+    adjusted_kline_df = data['symbol_data']['000001.SZ']['forward_adjusted_kline_data']
+    adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_MIN30_FORWARD.csv'), index=False)

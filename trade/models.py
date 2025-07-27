@@ -226,7 +226,8 @@ class Bar:
     low: Decimal
     close: Decimal
     volume: Decimal
-    timestamp: str  # 时间戳，格式为 'YYYY-MM-DD HH:MM:SS'
+    start_timestamp: str  # 开始时间戳，格式为 'YYYY-MM-DD HH:MM:SS'
+    end_timestamp: str  # 结束时间戳，格式为 'YYYY-MM-DD HH:MM:SS'
 
     def __post_init__(self):
         if self.open <= 0 or self.high <= 0 or self.low <= 0 or self.close <= 0:
@@ -235,5 +236,7 @@ class Bar:
             raise ValueError("成交量不能为负数")
         if len(self.symbol) <= 0:
             raise ValueError("证券代码不能为空")
-        if len(self.timestamp) <= 0:
-            raise ValueError("时间戳不能为空")
+        if len(self.start_timestamp) <= 0:
+            raise ValueError("开始时间戳不能为空")
+        if len(self.end_timestamp) <= 0:
+            raise ValueError("结束时间戳不能为空")
