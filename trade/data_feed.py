@@ -93,6 +93,7 @@ class BacktestDataFeed:
     def _load_symbol(self, symbol: str) -> Dict[str, IndexWrapper]:
         # 1. 加载除权除息数据
         dividend_info = pd.read_csv(os.path.join(self._archive_path, symbol, 'dividend_info.csv'), dtype=str)
+        dividend_info.dropna(subset=['ex_dividend_date'], inplace=True)  # 删除除权除息日期为空的行
         # 2. 加载财务数据
         financial_data = pd.read_csv(os.path.join(self._archive_path, symbol, 'financial_data.csv'), dtype=str)
         # 3. 加载k线数据

@@ -10,7 +10,12 @@ import random
 from decimal import Decimal
 import pandas as pd
 
-CLOCK: Clock # 全局时钟，对于vclock支持更新时间
+CLOCK: Clock = None # 全局时钟，对于vclock支持更新时间
+
+def get_clock() -> Clock:
+    if CLOCK is None:
+        raise ValueError("Clock has not been initialized. Please call init_vclock or init_rclock first.")
+    return CLOCK
 
 def init_rclock():
     global CLOCK
@@ -28,7 +33,7 @@ class TradingSystem:
         self.trades: Dict[str, Trade] = {}
 
     def start_day(self):
-        date = CLOCK.get_date()
+        date = get_clock().get_date()
 
         # 将持仓的冻结部分解冻
         for position in self.account.positions.values():
@@ -85,7 +90,7 @@ class TradingSystem:
             market_value = position.get_market_value(current_price[symbol])
             profit_loss = position.get_unrealized_pnl(current_price[symbol])
             pnl_dao.write_record(PNL(
-                date=CLOCK.get_date(),
+                date=get_clock().get_date(),
                 account_id=self.account.account_id,
                 symbol=symbol,
                 market_value=market_value,
@@ -98,8 +103,8 @@ class TradingSystem:
             order.status = OrderStatus.REJECTED
             return False
         
-        order.create_time = CLOCK.get_time()
-        order.update_time = CLOCK.get_time()
+        order.create_time = get_clock().get_time()
+        order.update_time = get_clock().get_time()
         order.status = OrderStatus.SUBMITTED
         self.orders[order.order_id] = order
         return True
@@ -116,7 +121,7 @@ class TradingSystem:
         # 解冻资金/股票
         self._unfreeze_assets(order)
         order.status = OrderStatus.CANCELLED
-        order.update_time = CLOCK.get_time()
+        order.update_time = get_clock().get_time()
         return True
     
     def execute_trade(self, order_id: str, quantity: Decimal, price: Decimal) -> Trade:
@@ -125,7 +130,7 @@ class TradingSystem:
         
         # 创建成交记录
         trade = Trade(
-            trade_id=f"T{CLOCK.get_ts()}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
+            trade_id=f"T{get_clock().get_ts()}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
             order_id=order_id,
             symbol=order.symbol,
             side=order.side,
@@ -134,7 +139,7 @@ class TradingSystem:
             amount=quantity * price,
             commission=quantity * price * COMMISSION_RATE,
             tax=quantity * price * TAX_RATE if order.side == OrderSide.SELL else Decimal('0'),
-            trade_time=CLOCK.get_time(),
+            trade_time=get_clock().get_time(),
             account_id=order.account_id
         )
 
@@ -190,7 +195,7 @@ class TradingSystem:
             order.status = OrderStatus.FILLED
         else:
             order.status = OrderStatus.PARTIALLY_FILLED
-        order.update_time = str(CLOCK.get_time())
+        order.update_time = str(get_clock().get_time())
 
         # 更新账户数据
         if trade.side == OrderSide.BUY:
