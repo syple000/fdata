@@ -46,6 +46,17 @@ def forward_adjust(kline_df: pd.DataFrame, dividend_df: pd.DataFrame) -> pd.Data
     
     return kline_df
     
+class DateRange:
+    def __init__(self, start: str, end: str, interval: int = 24*3600):
+        self.start = parse_ts(start)
+        self.end = parse_ts(end)
+        self.current = self.start
+        self.interval = interval
+
+    def __iter__(self):
+        while self.current <= self.end:
+            yield datetime.fromtimestamp(self.current).strftime("%Y-%m-%d %H:%M:%S")
+            self.current += self.interval
 
 class BacktestDataFeed:
     # 在回溯场景下，文件有所有信息（包括回溯时间后的数据），依赖时间游标控制可见性
@@ -67,7 +78,9 @@ class BacktestDataFeed:
             
             return self.df.iloc[:self.next_index]
 
-    def __init__(self, archive_path: str, symbols: List[str], kline_type: KLineType = KLineType.DAILY):
+    def __init__(self, start_date: str, end_date: str, archive_path: str, symbols: List[str], kline_type: KLineType = KLineType.DAILY):
+        self._start_date = start_date
+        self._end_date = end_date
         self._archive_path = archive_path
         self._symbols = symbols
         self._kline_type = kline_type
@@ -93,7 +106,44 @@ class BacktestDataFeed:
             'kline_data': self.IndexWrapper(kline_data, 'date', 24*3600)
         }
 
-    def get(self, date: str) -> Dict[str, pd.DataFrame]:
+    def __iter__(self):
+        date_range = DateRange(self._start_date, self._end_date)
+        pre_data = None
+        for date in date_range:
+            print(f"Processing date: {date}")
+
+            cur_data = self._get(date)
+
+            # 对历史数据进行前复权计算
+            for symbol, data_map in cur_data.items():
+                kline_data = data_map['kline_data']
+                dividend_info = data_map['dividend_info']
+                if pre_data is None or symbol not in pre_data:
+                    forward_adjusted_kline_data = forward_adjust(kline_data, dividend_info)
+                else:
+                    pre_forward_adjusted_kline_data = pre_data[symbol]['forward_adjusted_kline_data']
+                    
+                    pre_ts = 0
+                    if len(pre_forward_adjusted_kline_data) > 0:
+                        pre_ts = parse_ts(pre_forward_adjusted_kline_data.iloc[-1]['date'])
+                    
+                    ex_dividend_ts = 0
+                    if len(dividend_info) > 0:
+                        ex_dividend_ts = parse_ts(dividend_info.iloc[-1]['ex_dividend_date'])
+
+                    ts = 0
+                    if len(kline_data) > 0:
+                        ts = parse_ts(kline_data.iloc[-1]['date'])
+
+                    if ex_dividend_ts > pre_ts and ts >= ex_dividend_ts:
+                        forward_adjusted_kline_data = forward_adjust(kline_data, dividend_info)
+                    else:
+                        forward_adjusted_kline_data = pd.concat([pre_forward_adjusted_kline_data, kline_data]).drop_duplicates(subset='date', keep='first')
+                data_map['forward_adjusted_kline_data'] = forward_adjusted_kline_data
+            yield cur_data
+            pre_data = cur_data
+
+    def _get(self, date: str) -> Dict[str, pd.DataFrame]:
         result = {}
         for symbol, data_map in self._symbol_data_map.items():
             result[symbol] = {
@@ -103,26 +153,14 @@ class BacktestDataFeed:
             }
         return result
 
-class DateRange:
-    # 返回一个时间范围内的所有日期: %Y-%m-%d，yield逐个返回
-    def __init__(self, start: str, end: str):
-        self.start = parse_ts(start)
-        self.end = parse_ts(end)
-        self.current = self.start
-
-    def __iter__(self):
-        while self.current <= self.end:
-            yield datetime.fromtimestamp(self.current).strftime("%Y-%m-%d")
-            self.current += 24*3600  # 增加一天的秒数
-
 if __name__ == "__main__":
     # 测试沪深300部分股票
     archive_path = 'archive'
     symbols = ['000001.SZ', '000002.SZ', '600000.SH']
 
-    data_feed = BacktestDataFeed(archive_path, symbols)
+    data_feed = BacktestDataFeed('2001-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols)
 
-    data = data_feed.get('2025-06-12')
+    data = data_feed._get('2025-06-12')
     assert data['000001.SZ']['kline_data'].iloc[-1]['date'] == '2025-06-11', "Last kline date should be 2025-06-11"
     assert data['000001.SZ']['dividend_info'].iloc[-1]['ex_dividend_date'] == '2025-06-12', "Last dividend date should be 2025-06-12"
     assert data['000001.SZ']['financial_data'].iloc[-1]['report_date'] == '2025-03-31', "Last financial report date should be 2025-03-31"
@@ -132,10 +170,10 @@ if __name__ == "__main__":
         assert not data[symbol]['dividend_info'].empty, f"Dividend info for {symbol} should not be empty"
         assert not data[symbol]['financial_data'].empty, f"Financial data for {symbol} should not be empty"
 
-    for date in DateRange('2025-06-01', datetime.now().strftime("%Y-%m-%d")):
-        _ = data_feed.get(date)
+    # 测试日期范围迭代器
+    data_feed = BacktestDataFeed('2001-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols)
+    for data in data_feed:
+        pass
 
-    kline_df = pd.read_csv(os.path.join(archive_path, '000001.SZ', 'historical_data_DAILY_NONE.csv'), dtype=str)
-    dividend_df = pd.read_csv(os.path.join(archive_path, '000001.SZ', 'dividend_info.csv'), dtype=str)
-    adjusted_kline_df = forward_adjust(kline_df, dividend_df)
+    adjusted_kline_df = data['000001.SZ']['forward_adjusted_kline_data']
     adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_DAILY_FORWARD.csv'), index=False)
