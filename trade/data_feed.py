@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import re
 from datetime import datetime
+import logging
 
 from fdata.market_data.models import KLineType
 
@@ -110,9 +111,9 @@ class BacktestDataFeed:
         date_range = DateRange(self._start_date, self._end_date)
         pre_data = None
         for date in date_range:
-            print(f"Processing date: {date}")
-
+            logging.info(f"Processing date: {date}")
             cur_data = self._get(date)
+            cur_data['date'] = date
 
             # 对历史数据进行前复权计算
             for symbol, data_map in cur_data.items():

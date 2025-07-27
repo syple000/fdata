@@ -1,7 +1,7 @@
 
 from .models import *
 from .config import *
-from .clock import Clock, VClock
+from .clock import Clock, RClock, VClock
 from fdata.dao.csv_dao import CSVGenericDAO
 
 import os
@@ -10,88 +10,25 @@ import random
 from decimal import Decimal
 import pandas as pd
 
+CLOCK: Clock # 全局时钟，对于vclock支持更新时间
+
+def init_rclock():
+    global CLOCK
+    CLOCK = RClock()
+
+def init_vclock(time: str = '2001-01-01 00:00:00'):
+    global CLOCK
+    CLOCK = VClock(time=time)
+
 class TradingSystem:
-    def __init__(self, account: Account, clock: Clock, dividend_infos: Dict[str, pd.DataFrame]):
+    def __init__(self, account: Account, dividend_infos: Dict[str, pd.DataFrame]):
         self.account = account
-        self.clock = clock
         self.dividend_infos = dividend_infos
         self.orders: Dict[str, Order] = {}
         self.trades: Dict[str, Trade] = {}
 
-    def end_day(self, order_dao: CSVGenericDAO[Order], trade_dao: CSVGenericDAO[Trade]): # 关闭所有未结束订单，对订单交易进行数据落地
-        orders = []
-        for order in self.orders.values():
-            if order.status != OrderStatus.FILLED and order.status != OrderStatus.CANCELLED and order.status != OrderStatus.REJECTED:
-                self.cancel_order(order.order_id)
-            orders.append(order)
-        orders.sort(key=lambda x: x.create_time)
-        order_dao.write_records(orders)
-        self.orders = {}
-
-        trades = []
-        for trade in self.trades.values():
-            trades.append(trade)
-        trades.sort(key=lambda x: x.trade_time)
-        trade_dao.write_records(trades)
-        self.trades = {}
-
-    def submit_order(self, order: Order) -> bool:
-        """提交订单"""
-        # 冻结资金/股票
-        if not self._freeze_assets(order):
-            order.status = OrderStatus.REJECTED
-            return False
-        
-        order.create_time = self.clock.get_time()
-        order.update_time = self.clock.get_time()
-        order.status = OrderStatus.SUBMITTED
-        self.orders[order.order_id] = order
-        return True
-    
-    def cancel_order(self, order_id: str) -> bool:
-        """撤销订单"""
-        if order_id not in self.orders:
-            return False
-        
-        order = self.orders[order_id]
-        if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]:
-            return False
-        
-        # 解冻资金/股票
-        self._unfreeze_assets(order)
-        order.status = OrderStatus.CANCELLED
-        order.update_time = self.clock.get_time()
-        return True
-    
-    def execute_trade(self, order_id: str, quantity: Decimal, price: Decimal) -> Trade:
-        """执行成交"""
-        order = self.orders[order_id]
-        
-        # 创建成交记录
-        trade = Trade(
-            trade_id=f"T{self.clock.get_ts()}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
-            order_id=order_id,
-            symbol=order.symbol,
-            side=order.side,
-            quantity=quantity,
-            price=price,
-            amount=quantity * price,
-            commission=quantity * price * COMMISSION_RATE,
-            tax=quantity * price * TAX_RATE if order.side == OrderSide.SELL else Decimal('0'),
-            trade_time=self.clock.get_time(),
-            account_id=order.account_id
-        )
-
-        # 更新订单、持仓和资金
-        self._update(order, trade)
-        
-        trade.status = TradeStatus.CONFIRMED
-        self.trades[trade.trade_id] = trade
-        return trade
-
-    # 交易日开始，计算 分红、送/配股 更新仓位和资金
     def start_day(self):
-        date = self.clock.get_date()
+        date = CLOCK.get_date()
 
         # 遍历账户持仓，进行分红送配股计算
         for symbol, position in self.account.positions.items():
@@ -117,7 +54,78 @@ class TradingSystem:
                     dividend_quantity = (position.quantity / Decimal(10)) * total_transfer_ratio
                     position.quantity += dividend_quantity
                     position.available_quantity += dividend_quantity
-   
+
+    def end_day(self, order_dao: CSVGenericDAO[Order], trade_dao: CSVGenericDAO[Trade]): # 关闭所有未结束订单，对订单交易进行数据落地
+        orders = []
+        for order in self.orders.values():
+            if order.status != OrderStatus.FILLED and order.status != OrderStatus.CANCELLED and order.status != OrderStatus.REJECTED:
+                self.cancel_order(order.order_id)
+            orders.append(order)
+        orders.sort(key=lambda x: x.create_time)
+        order_dao.write_records(orders)
+        self.orders = {}
+
+        trades = []
+        for trade in self.trades.values():
+            trades.append(trade)
+        trades.sort(key=lambda x: x.trade_time)
+        trade_dao.write_records(trades)
+        self.trades = {}
+
+    def submit_order(self, order: Order) -> bool:
+        """提交订单"""
+        if not self._freeze_assets(order):
+            order.status = OrderStatus.REJECTED
+            return False
+        
+        order.create_time = CLOCK.get_time()
+        order.update_time = CLOCK.get_time()
+        order.status = OrderStatus.SUBMITTED
+        self.orders[order.order_id] = order
+        return True
+    
+    def cancel_order(self, order_id: str) -> bool:
+        """撤销订单"""
+        if order_id not in self.orders:
+            return False
+        
+        order = self.orders[order_id]
+        if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]:
+            return False
+        
+        # 解冻资金/股票
+        self._unfreeze_assets(order)
+        order.status = OrderStatus.CANCELLED
+        order.update_time = CLOCK.get_time()
+        return True
+    
+    def execute_trade(self, order_id: str, quantity: Decimal, price: Decimal) -> Trade:
+        """执行成交"""
+        order = self.orders[order_id]
+        
+        # 创建成交记录
+        trade = Trade(
+            trade_id=f"T{CLOCK.get_ts()}{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))}",
+            order_id=order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=quantity,
+            price=price,
+            amount=quantity * price,
+            commission=quantity * price * COMMISSION_RATE,
+            tax=quantity * price * TAX_RATE if order.side == OrderSide.SELL else Decimal('0'),
+            trade_time=CLOCK.get_time(),
+            account_id=order.account_id
+        )
+
+        # 更新订单、持仓和资金
+        self._update(order, trade)
+        
+        trade.status = TradeStatus.CONFIRMED
+        self.trades[trade.trade_id] = trade
+        return trade
+
+  
     def _freeze_assets(self, order: Order) -> bool:
         if order.side == OrderSide.BUY:
             required_funds = order.remaining_quantity * order.price * (1 + COMMISSION_RATE)
@@ -162,7 +170,7 @@ class TradingSystem:
             order.status = OrderStatus.FILLED
         else:
             order.status = OrderStatus.PARTIALLY_FILLED
-        order.update_time = str(self.clock.get_time())
+        order.update_time = str(CLOCK.get_time())
 
         # 更新账户数据
         if trade.side == OrderSide.BUY:
@@ -200,6 +208,8 @@ class TradingSystem:
             raise Exception(f"Unknown order side: {trade.side}")
 
 if __name__ == '__main__':
+    init_vclock(time='2023-10-01 09:30:00')
+
     # 测试的印花税5/万，手续费1/万
     # 初始化账户：2w 资金，持仓 000001.SZ 200 股
     account = Account(
@@ -216,8 +226,7 @@ if __name__ == '__main__':
         frozen_quantity=Decimal('0'),
         cost=Decimal('2032')
     )
-    clock = VClock(time='2023-10-01 09:30:00')  # 模拟时间
-    ts = TradingSystem(account, clock, {'000001.SZ': pd.DataFrame({
+    ts = TradingSystem(account, {'000001.SZ': pd.DataFrame({
         'ex_dividend_date': ['2023-10-01'],
         'total_transfer_ratio': [2.5],
         'cash_dividend': [2],
