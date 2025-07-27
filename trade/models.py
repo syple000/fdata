@@ -171,8 +171,6 @@ class Position:
 
     def get_unrealized_pnl(self, current_price: Decimal) -> Decimal:
         """计算未实现盈亏"""
-        if self.quantity == 0:
-            return Decimal('0')
         return current_price * self.quantity * (1 - COMMISSION_RATE - TAX_RATE) - self.cost
 
     def get_unrealized_pnl_rate(self, current_price: Decimal) -> Decimal:
@@ -222,6 +220,7 @@ class PNL:
     date: str
     account_id: str
     symbol: str
+    cost: Decimal
     market_value: Decimal
     profit_loss: Decimal
 

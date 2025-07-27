@@ -93,6 +93,7 @@ class TradingSystem:
                 date=get_clock().get_date(),
                 account_id=self.account.account_id,
                 symbol=symbol,
+                cost=position.cost,
                 market_value=market_value,
                 profit_loss=profit_loss
             ))
@@ -225,7 +226,8 @@ class TradingSystem:
             assert self.account.positions[trade.symbol].frozen_quantity >= 0, "Frozen position quantity cannot be negative"
 
             if self.account.positions[trade.symbol].quantity <= 0:
-                del self.account.positions[trade.symbol]
+                pass
+                # del self.account.positions[trade.symbol]
 
             self.account.available_balance = self.account.available_balance + trade.amount - trade.commission - trade.tax
             self.account.balance = self.account.balance + trade.amount - trade.commission - trade.tax
