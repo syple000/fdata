@@ -47,18 +47,6 @@ def forward_adjust(kline_df: pd.DataFrame, dividend_df: pd.DataFrame) -> pd.Data
     
     return kline_df
     
-class DateRange:
-    def __init__(self, start: str, end: str, interval: int = 24*3600):
-        self.start = parse_ts(start)
-        self.end = parse_ts(end)
-        self.current = self.start
-        self.interval = interval
-
-    def __iter__(self):
-        while self.current <= self.end:
-            yield datetime.fromtimestamp(self.current).strftime("%Y-%m-%d %H:%M:%S")
-            self.current += self.interval
-
 class BacktestDataFeed:
     # 在回溯场景下，文件有所有信息（包括回溯时间后的数据），依赖时间游标控制可见性
     class IndexWrapper:
@@ -86,9 +74,13 @@ class BacktestDataFeed:
         self._symbols = symbols
         self._kline_type = kline_type
 
+        date_set = set()
         self._symbol_data_map: Dict[str, Dict[str, BacktestDataFeed.IndexWrapper]] = {}
         for symbol in self._symbols:
             self._symbol_data_map[symbol] = self._load_symbol(symbol)
+            date_set.update(self._symbol_data_map[symbol]['kline_data'].df['date'].unique())
+        self._date_list = list(date_set)
+        self._date_list.sort()
 
     def _load_symbol(self, symbol: str) -> Dict[str, IndexWrapper]:
         # 1. 加载除权除息数据
@@ -117,21 +109,8 @@ class BacktestDataFeed:
         }
 
     def __iter__(self):
-        if self._kline_type == KLineType.DAILY:
-            date_range = DateRange(self._start_date, self._end_date, 24*3600)
-        elif self._kline_type == KLineType.MIN5:
-            date_range = DateRange(self._start_date, self._end_date, 5*60)
-        elif self._kline_type == KLineType.MIN15:
-            date_range = DateRange(self._start_date, self._end_date, 15*60)
-        elif self._kline_type == KLineType.MIN30:
-            date_range = DateRange(self._start_date, self._end_date, 30*60)
-        elif self._kline_type == KLineType.MIN60:
-            date_range = DateRange(self._start_date, self._end_date, 60*60)
-        else:
-            raise ValueError(f"Unsupported kline type: {self._kline_type}")
-
         pre_data = None
-        for date in date_range:
+        for date in self._date_list:
             logging.info(f"Processing date: {date}")
             symbol_data = self._get(date)
             cur_data = {
