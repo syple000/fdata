@@ -30,6 +30,12 @@ class TradingSystem:
     def start_day(self):
         date = CLOCK.get_date()
 
+        # 将持仓的冻结部分解冻
+        for position in self.account.positions.values():
+            position.available_quantity += position.frozen_quantity
+            position.frozen_quantity = Decimal('0')
+            assert position.available_quantity == position.quantity, "可用持仓数量应等于总持仓数量"
+
         # 遍历账户持仓，进行分红送配股计算
         for symbol, position in self.account.positions.items():
             if symbol in self.dividend_infos:
@@ -55,7 +61,7 @@ class TradingSystem:
                     position.quantity += dividend_quantity
                     position.available_quantity += dividend_quantity
 
-    def end_day(self, order_dao: CSVGenericDAO[Order], trade_dao: CSVGenericDAO[Trade]): # 关闭所有未结束订单，对订单交易进行数据落地
+    def end_day(self, order_dao: CSVGenericDAO[Order], trade_dao: CSVGenericDAO[Trade], pnl_dao: CSVGenericDAO[PNL], current_price: Dict[str, Decimal]): # 关闭所有未结束订单，对订单交易进行数据落地
         orders = []
         for order in self.orders.values():
             if order.status != OrderStatus.FILLED and order.status != OrderStatus.CANCELLED and order.status != OrderStatus.REJECTED:
@@ -71,6 +77,20 @@ class TradingSystem:
         trades.sort(key=lambda x: x.trade_time)
         trade_dao.write_records(trades)
         self.trades = {}
+
+        # 计算账户市值和盈亏
+        for symbol, position in self.account.positions.items():
+            if symbol not in current_price:
+                raise ValueError(f"当前价格中缺少证券代码: {symbol}")
+            market_value = position.get_market_value(current_price[symbol])
+            profit_loss = position.get_unrealized_pnl(current_price[symbol])
+            pnl_dao.write_record(PNL(
+                date=CLOCK.get_date(),
+                account_id=self.account.account_id,
+                symbol=symbol,
+                market_value=market_value,
+                profit_loss=profit_loss
+            ))
 
     def submit_order(self, order: Order) -> bool:
         """提交订单"""
@@ -222,8 +242,8 @@ if __name__ == '__main__':
     account.positions['000001.SZ'] = Position(
         symbol='000001.SZ',
         quantity=Decimal('160'),
-        available_quantity=Decimal('160'),
-        frozen_quantity=Decimal('0'),
+        available_quantity=Decimal('140'),
+        frozen_quantity=Decimal('20'),
         cost=Decimal('2032')
     )
     ts = TradingSystem(account, {'000001.SZ': pd.DataFrame({
@@ -433,19 +453,22 @@ if __name__ == '__main__':
     )
     ts.submit_order(order_b4)
 
-    if os.path.exists('orders.csv'):
-        os.remove('orders.csv')
-    if os.path.exists('trades.csv'):
-        os.remove('trades.csv')
-    with CSVGenericDAO[Order]('orders.csv', Order) as order_dao, \
-         CSVGenericDAO[Trade]('trades.csv', Trade) as trade_dao:
-        ts.end_day(order_dao, trade_dao)
-
-    print(ts.account)
     current_price = {
         '000001.SZ': Decimal('12'),
         '000002.SZ': Decimal('19')
     }
+    if os.path.exists('orders.csv'):
+        os.remove('orders.csv')
+    if os.path.exists('trades.csv'):
+        os.remove('trades.csv')
+    if os.path.exists('pnl.csv'):
+        os.remove('pnl.csv')
+    with CSVGenericDAO[Order]('orders.csv', Order) as order_dao, \
+         CSVGenericDAO[Trade]('trades.csv', Trade) as trade_dao, \
+         CSVGenericDAO[PNL]('pnl.csv', PNL) as pnl_dao:
+        ts.end_day(order_dao, trade_dao, pnl_dao, current_price)
+
+    print(ts.account)
     print(f'market_value: {ts.account.get_market_value(current_price)}')
     print(f'total_asset: {ts.account.get_total_asset(current_price)}')
     print(f'profit_loss: {ts.account.get_profit_loss(current_price)}')

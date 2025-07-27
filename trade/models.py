@@ -218,6 +218,14 @@ class Account:
         return profit_loss
 
 @dataclass
+class PNL:
+    date: str
+    account_id: str
+    symbol: str
+    market_value: Decimal
+    profit_loss: Decimal
+
+@dataclass
 class Bar:
     """K线数据模型"""
     symbol: str
