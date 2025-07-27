@@ -71,8 +71,8 @@ class TestStrategy(Strategy):
             }
         }
         '''
-        for symbol in self._account.positions.keys():
-            if symbol not in infos:
+        for symbol, position in self._account.positions.items():
+            if symbol not in infos and position.quantity > Decimal('0'):
                 raise ValueError(f"Symbol {symbol} not found in infos")
         self._infos = infos
 
