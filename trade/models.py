@@ -220,6 +220,7 @@ class PNL:
     date: str
     account_id: str
     symbol: str
+    quantity: Decimal
     cost: Decimal
     market_value: Decimal
     profit_loss: Decimal
@@ -247,3 +248,8 @@ class Bar:
             raise ValueError("开始时间戳不能为空")
         if len(self.end_timestamp) <= 0:
             raise ValueError("结束时间戳不能为空")
+
+@dataclass
+class TargetPosition: # 目标持仓信号
+    symbol: str
+    quantity: Decimal

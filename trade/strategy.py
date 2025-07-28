@@ -4,19 +4,13 @@ from typing import Dict, List, Any
 import pandas as pd
 from dataclasses import dataclass
 
-from .models import Bar, Order, Trade, Account, OrderSide
-
-# 产出目标持仓
-@dataclass
-class TargetPosition:
-    symbol: str
-    quantity: Decimal
+from .models import Bar, Order, Trade, Account, OrderSide, TargetPosition
 
 class Strategy(ABC):
     # 更新基础财务、历史行情、资讯（若有）、除息除权等信息
     # 每天开盘前调用一次
     @abstractmethod
-    def on_fundamentals(self, infos: Dict[str, Dict[str, pd.DataFrame]]): # 获取基本面、资讯等信息
+    def on_fundamentals(self, infos: Dict[str, Any]): # 获取基本面、资讯等信息
         pass
 
     @abstractmethod
@@ -58,7 +52,7 @@ class TestStrategy(Strategy):
             'position': position,
         }
 
-    def on_fundamentals(self, infos: Dict[str, Dict[str, pd.DataFrame]]):
+    def on_fundamentals(self, infos: Dict[str, Any]):
         '''
         数据格式如下：
         {

@@ -93,6 +93,7 @@ class TradingSystem:
                 date=get_clock().get_date(),
                 account_id=self.account.account_id,
                 symbol=symbol,
+                quantity=position.quantity,
                 cost=position.cost,
                 market_value=market_value,
                 profit_loss=profit_loss

@@ -48,6 +48,7 @@ class Backtest:
 
                 # 执行上一个bar周期产生的仓位信号
                 for target_position in target_positions:
+                    logging.info(f"Executing target position for {target_position.symbol} at {date_time}, quantity: {target_position.quantity}")
                     symbol = target_position.symbol
                     quantity = target_position.quantity
                     org_quantity = Decimal('0')
@@ -67,6 +68,8 @@ class Backtest:
                         )
                         if self._ts.submit_order(order):
                             self._ts.execute_trade(order.order_id, order.quantity, order.price)
+                        else:
+                            logging.error(f"Failed to submit buy order for {symbol} at {date_time}, target_quantity: {quantity}")
                     elif quantity < org_quantity:
                         order = Order(
                             order_id=f"{parse_ts(date_time)}{rand_str()}",
@@ -79,6 +82,8 @@ class Backtest:
                         )
                         if self._ts.submit_order(order):
                             self._ts.execute_trade(order.order_id, order.quantity, order.price)
+                        else:
+                            logging.error(f"Failed to submit sell order for {symbol} at {date_time}, target_quantity: {quantity}")
                     else:
                         # 持平，不操作
                         pass
@@ -121,6 +126,9 @@ class Backtest:
                     bars.append(bar)
                 target_positions = self._strategy.on_universe(bars)
                 logging.info(f"Processed data for {date} at {date_time}")
+
+            # 退出清理，结束最后一个交易日
+            self._ts.end_day(orders_csv, trades_csv, pnl_csv, cur_price)
                         
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
