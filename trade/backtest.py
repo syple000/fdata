@@ -11,7 +11,7 @@ from fdata.market_data.models import KLineType
 from fdata.utils.rand_str import rand_str
 from .models import Order, Trade, Bar, OrderStatus, TradeStatus, Account, PNL, OrderSide
 from .trading_system import TradingSystem, init_vclock, get_clock 
-from .strategy import Strategy, BaseStrategy
+from .strategy import Strategy, BaseStrategy, TestStrategy
 from .data_feed import BacktestDataFeed, parse_ts
 
 # 策略回放
@@ -40,7 +40,7 @@ class Backtest:
                     self._ts.end_day(orders_csv, trades_csv, pnl_csv, cur_price)
                     get_clock().set_time(date_time)
                     self._ts.start_day()
-                    self._strategy.on_fundamentals(symbol_data) # kline的时间是区间结束的时间（日线是XX日结束；分钟线是XX时间结束），所以这个数据包含了一条未来信息，处理时请注意
+                    self._strategy.on_fundamentals(date, symbol_data) # kline的时间是区间结束的时间（日线是XX日结束；分钟线是XX时间结束），所以这个数据包含了一条未来信息，处理时请注意
                 else:
                     get_clock().set_time(date_time)
 
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         dividend_infos[symbol] = pd.read_csv(f'archive/{symbol}/dividend_info.csv', dtype=str)
 
     ts = TradingSystem(account, dividend_infos)
-    strategy = BaseStrategy(account)
+    strategy = TestStrategy(account)
     feed = BacktestDataFeed(
         start_date='2015-06-08',
         end_date='2018-06-08',
