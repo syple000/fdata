@@ -84,14 +84,14 @@ class TestStrategy(Strategy):
             symbol_status[bar.symbol] = self._get_symbol_status(bar.symbol)
 
         # todo 分析收益/风险，产出目标持仓
-        if len(data) > 0 and data[0].end_timestamp == '2025-07-16 10:00:00':
-            # 模拟在2025-07-16 10:00:00时，买入000001.SZ和000002.SZ各100股
+        if len(data) > 0 and data[0].end_timestamp == '2015-08-13':
+            # 模拟在2015-08-13时(交易在下一天开盘)，买入000001.SZ和000002.SZ各100股
             return [
                 TargetPosition(symbol='000001.SZ', quantity=Decimal('100')),
                 TargetPosition(symbol='000002.SZ', quantity=Decimal('100'))
             ]
-        if len(data) > 0 and data[0].end_timestamp == '2025-07-21 11:00:00':
-            # 模拟在2025-07-16 11:00:00时，卖出000001.SZ和000002.SZ
+        if len(data) > 0 and data[0].end_timestamp == '2016-08-10':
+            # 模拟在2016-08-10时（交易在下一天开盘），卖出000001.SZ和000002.SZ
             return [
                 TargetPosition(symbol='000001.SZ', quantity=Decimal('0')),
                 TargetPosition(symbol='000002.SZ', quantity=Decimal('50'))

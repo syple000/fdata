@@ -81,6 +81,7 @@ class BacktestDataFeed:
             date_set.update(self._symbol_data_map[symbol]['kline_data'].df['date'].unique())
         self._date_list = list(date_set)
         self._date_list.sort()
+        self._date_list = [date for date in self._date_list if parse_ts(start_date) <= parse_ts(date) <= parse_ts(end_date)]
 
     def _load_symbol(self, symbol: str) -> Dict[str, IndexWrapper]:
         # 1. 加载除权除息数据

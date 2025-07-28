@@ -154,10 +154,10 @@ if __name__ == "__main__":
     ts = TradingSystem(account, dividend_infos)
     strategy = TestStrategy(account)
     feed = BacktestDataFeed(
-        start_date='2025-06-27',
-        end_date='2025-07-27',
+        start_date='2015-06-08',
+        end_date='2018-06-08',
         symbols=symbols,
-        kline_type=KLineType.MIN5,
+        kline_type=KLineType.DAILY,
         archive_path='archive'
     )
     backtest = Backtest(ts, strategy, feed)
