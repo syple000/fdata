@@ -2,6 +2,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict
 from dataclasses import dataclass, field
+import pandas as pd
 
 from .config import *
 
@@ -253,3 +254,16 @@ class Bar:
 class TargetPosition: # 目标持仓信号
     symbol: str
     quantity: Decimal
+
+@dataclass
+class Fundamental:
+    symbol: str
+    financial_data: pd.DataFrame # 对齐FinancialData结构
+    dividend_info: pd.DataFrame # 对齐DividendInfo结构
+    kline_data: pd.DataFrame # 对齐HistoricalData结构
+    forward_adjusted_kline_data: pd.DataFrame # 对齐HistoricalData结构
+
+@dataclass
+class MarketSnapshot:
+    date: str
+    symbols: Dict[str, Fundamental]

@@ -11,7 +11,7 @@ from fdata.market_data.models import KLineType
 from fdata.utils.rand_str import rand_str
 from .models import Order, Trade, Bar, OrderStatus, TradeStatus, Account, PNL, OrderSide
 from .trading_system import TradingSystem, init_vclock, get_clock 
-from .strategy import Strategy, TestStrategy
+from .strategy import Strategy, BaseStrategy
 from .data_feed import BacktestDataFeed, parse_ts
 
 # 策略回放
@@ -32,9 +32,9 @@ class Backtest:
             target_positions = []
 
             for data in self._feed:
-                date = datetime.fromtimestamp(parse_ts(data['date'])).strftime('%Y-%m-%d')
-                date_time = datetime.fromtimestamp(parse_ts(data['date'])).strftime('%Y-%m-%d %H:%M:%S')
-                symbol_data = data['symbol_data']
+                date = datetime.fromtimestamp(parse_ts(data.date)).strftime('%Y-%m-%d')
+                date_time = datetime.fromtimestamp(parse_ts(data.date)).strftime('%Y-%m-%d %H:%M:%S')
+                symbol_data = data.symbols
 
                 if cur_day is None or cur_day != date:
                     self._ts.end_day(orders_csv, trades_csv, pnl_csv, cur_price)
@@ -54,7 +54,7 @@ class Backtest:
                     org_quantity = Decimal('0')
                     if symbol in self._ts.account.positions:
                         org_quantity = self._ts.account.positions[symbol].quantity
-                    last_kline = symbol_data[symbol]['forward_adjusted_kline_data'].iloc[-1] # 获取最新的前复权K线数据，不能为空！
+                    last_kline = symbol_data[symbol].forward_adjusted_kline_data.iloc[-1] # 获取最新的前复权K线数据，不能为空！
                     # 默认以开盘价成交
                     if quantity > org_quantity:
                         order = Order(
@@ -89,10 +89,10 @@ class Backtest:
                         pass
 
                 bars = []
-                for symbol, data_map in symbol_data.items():
-                    if data_map['forward_adjusted_kline_data'].empty:
+                for symbol, data in symbol_data.items():
+                    if data.forward_adjusted_kline_data.empty:
                         continue
-                    last_kline = data_map['forward_adjusted_kline_data'].iloc[-1]
+                    last_kline = data.forward_adjusted_kline_data.iloc[-1]
                     cur_price[symbol] = Decimal(last_kline['close_price'])
 
                     if self._feed._kline_type == KLineType.DAILY:
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         dividend_infos[symbol] = pd.read_csv(f'archive/{symbol}/dividend_info.csv', dtype=str)
 
     ts = TradingSystem(account, dividend_infos)
-    strategy = TestStrategy(account)
+    strategy = BaseStrategy(account)
     feed = BacktestDataFeed(
         start_date='2015-06-08',
         end_date='2018-06-08',

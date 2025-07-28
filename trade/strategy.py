@@ -3,35 +3,29 @@ from decimal import Decimal
 from typing import Dict, List, Any
 import pandas as pd
 from dataclasses import dataclass
+import logging
 
-from .models import Bar, Order, Trade, Account, OrderSide, TargetPosition
+from .models import Bar, Order, Trade, Account, OrderSide, TargetPosition, Fundamental
 
 class Strategy(ABC):
     # 更新基础财务、历史行情、资讯（若有）、除息除权等信息
     # 每天开盘前调用一次
     @abstractmethod
-    def on_fundamentals(self, infos: Dict[str, Any]): # 获取基本面、资讯等信息
+    def on_fundamentals(self, infos: Dict[str, Fundamental]): # 获取基本面、资讯等信息
         pass
 
     @abstractmethod
     def on_universe(self, data: List[Bar]) -> List[TargetPosition]:
         pass
 
-class TestStrategy(Strategy):
+class BaseStrategy(Strategy):
     def __init__(self, account: Account):
         self._account = account
-        self._infos = None
+        self._infos: Dict[str, Fundamental] = {}
+        self._bars: Dict[str, List[Bar]] = {}
+        self._klines: Dict[str, pd.DataFrame] = {}
 
-    def _get_symbol_status(self, symbol: str) -> Dict[str, Any]:
-        info = self._infos.get(symbol, {})
-        financial_data = info.get('financial_data', None)
-        dividend_info = info.get('dividend_info', None)
-        forward_adjusted_kline_data = info.get('forward_adjusted_kline_data', None)
-        position = self._account.positions.get(symbol, None)
-        bars = info.get('bars', [])
-
-        # 将bars合并到forward_adjusted_kline_data中
-        df = forward_adjusted_kline_data.copy() if forward_adjusted_kline_data is not None else pd.DataFrame(columns=['symbol', 'date', 'open_price', 'high_price','low_price', 'close_price','volume','turnover','change_percent'])
+    def _merge_bars(self, forward_adjusted_kline_data: pd.DataFrame, bars: List[Bar]) -> pd.DataFrame:
         bar_dict = {'symbol': [], 'date': [], 'open_price': [], 'high_price': [], 'low_price': [], 'close_price': [], 'volume': [], 'turnover': [], 'change_percent': []}
         for bar in bars:
             bar_dict['symbol'].append(bar.symbol)
@@ -43,28 +37,9 @@ class TestStrategy(Strategy):
             bar_dict['volume'].append(str(bar.volume))
             bar_dict['turnover'].append('0')
             bar_dict['change_percent'].append('0')
-        df = pd.concat([df, pd.DataFrame(bar_dict)], ignore_index=True).drop_duplicates(subset=['date'], keep='first')
+        return pd.concat([forward_adjusted_kline_data, pd.DataFrame(bar_dict)], ignore_index=True).drop_duplicates(subset=['date'], keep='first')
 
-        return {
-            'financial_data': financial_data,
-            'dividend_info': dividend_info,
-            'kline_data': df, # 前复权
-            'position': position,
-        }
-
-    def on_fundamentals(self, infos: Dict[str, Any]):
-        '''
-        数据格式如下：
-        {
-            '000001.SZ': {
-                'financial_data': pd.DataFrame(...),
-                'dividend_info': pd.DataFrame(...),
-                'kline_data': pd.DataFrame(...),
-                'forward_adjusted_kline_data': pd.DataFrame(...),
-                'bars': [],
-            }
-        }
-        '''
+    def on_fundamentals(self, infos: Dict[str, Fundamental]):
         for symbol, position in self._account.positions.items():
             if symbol not in infos and position.quantity > Decimal('0'):
                 raise ValueError(f"Symbol {symbol} not found in infos")
@@ -74,14 +49,19 @@ class TestStrategy(Strategy):
         if self._infos is None:
             raise ValueError("Fundamentals data not set. Call on_fundamentals() first.")
        
-        symbol_status = {}
         for bar in data:
             if bar.symbol not in self._infos:
-                self._infos[bar.symbol] = {}
-            if 'bars' not in self._infos[bar.symbol]:
-                self._infos[bar.symbol]['bars'] = []
-            self._infos[bar.symbol]['bars'].append(bar)
-            symbol_status[bar.symbol] = self._get_symbol_status(bar.symbol)
+                logging.error(f'symbol: {bar.symbol} not in infos, skip')
+                continue
+            if bar.symbol not in self._bars:
+                self._bars[bar.symbol] = []
+            self._bars[bar.symbol].append(bar)
+            
+            # 合并历史k线与当前bar数据
+            self._klines[bar.symbol] = self._merge_bars(
+                self._infos[bar.symbol].forward_adjusted_kline_data,
+                self._bars[bar.symbol]
+            )
 
         # todo 分析收益/风险，产出目标持仓
         if len(data) > 0 and data[0].end_timestamp == '2015-08-13':

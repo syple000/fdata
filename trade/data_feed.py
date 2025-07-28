@@ -7,6 +7,7 @@ from datetime import datetime
 import logging
 
 from fdata.market_data.models import KLineType
+from .models import Fundamental, MarketSnapshot
 
 def parse_ts(time_str: str) -> int:
     # 判断格式，支持格式1: %Y-%m-%d %H:%M:%S，格式2: %Y-%m-%d
@@ -110,26 +111,26 @@ class BacktestDataFeed:
         }
 
     def __iter__(self):
-        pre_data = None
+        pre_data: MarketSnapshot = None
         for date in self._date_list:
             logging.info(f"Processing date: {date}")
             symbol_data = self._get(date)
-            cur_data = {
-                'date': date,
-                'symbol_data': symbol_data,
-            }
-            pre_symbol_data = None
+            cur_data = MarketSnapshot(
+                date=date,
+                symbols=symbol_data
+            )
+            pre_symbol_data: Dict[str, Fundamental] = None
             if pre_data is not None:
-                pre_symbol_data = pre_data['symbol_data']
+                pre_symbol_data = pre_data.symbols
 
             # 对历史数据进行前复权计算
-            for symbol, data_map in symbol_data.items():
-                kline_data = data_map['kline_data']
-                dividend_info = data_map['dividend_info']
+            for symbol, data in symbol_data.items():
+                kline_data = data.kline_data
+                dividend_info = data.dividend_info
                 if pre_symbol_data is None or symbol not in pre_symbol_data:
                     forward_adjusted_kline_data = forward_adjust(kline_data, dividend_info)
                 else:
-                    pre_forward_adjusted_kline_data = pre_symbol_data[symbol]['forward_adjusted_kline_data']
+                    pre_forward_adjusted_kline_data = pre_symbol_data[symbol].forward_adjusted_kline_data
 
                     pre_ts = 0
                     if len(pre_forward_adjusted_kline_data) > 0:
@@ -147,18 +148,21 @@ class BacktestDataFeed:
                         forward_adjusted_kline_data = forward_adjust(kline_data, dividend_info)
                     else:
                         forward_adjusted_kline_data = pd.concat([pre_forward_adjusted_kline_data, kline_data]).drop_duplicates(subset='date', keep='first')
-                data_map['forward_adjusted_kline_data'] = forward_adjusted_kline_data
+                data.forward_adjusted_kline_data = forward_adjusted_kline_data
             yield cur_data
             pre_data = cur_data
 
-    def _get(self, date: str) -> Dict[str, pd.DataFrame]:
+    def _get(self, date: str) -> Dict[str, Fundamental]:
         result = {}
         for symbol, data_map in self._symbol_data_map.items():
-            result[symbol] = {
-                'dividend_info': data_map['dividend_info'].till(date),
-                'financial_data': data_map['financial_data'].till(date),
-                'kline_data': data_map['kline_data'].till(date)
-            }
+            fundamental = Fundamental(
+                symbol=symbol,
+                financial_data=data_map['financial_data'].till(date),
+                dividend_info=data_map['dividend_info'].till(date),
+                kline_data=data_map['kline_data'].till(date),
+                forward_adjusted_kline_data=None,
+            )
+            result[symbol] = fundamental
         return result
 
 if __name__ == "__main__":
@@ -169,27 +173,27 @@ if __name__ == "__main__":
     data_feed = BacktestDataFeed('2001-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols)
 
     data = data_feed._get('2025-06-12')
-    assert data['000001.SZ']['kline_data'].iloc[-1]['date'] == '2025-06-12', "Last kline date should be 2025-06-11"
-    assert data['000001.SZ']['dividend_info'].iloc[-1]['ex_dividend_date'] == '2025-06-12', "Last dividend date should be 2025-06-12"
-    assert data['000001.SZ']['financial_data'].iloc[-1]['report_date'] == '2025-03-31', "Last financial report date should be 2025-03-31"
+    assert data['000001.SZ'].kline_data.iloc[-1]['date'] == '2025-06-12', "Last kline date should be 2025-06-11"
+    assert data['000001.SZ'].dividend_info.iloc[-1]['ex_dividend_date'] == '2025-06-12', "Last dividend date should be 2025-06-12"
+    assert data['000001.SZ'].financial_data.iloc[-1]['report_date'] == '2025-03-31', "Last financial report date should be 2025-03-31"
 
     for symbol in symbols:
-        assert not data[symbol]['kline_data'].empty, f"Kline data for {symbol} should not be empty"
-        assert not data[symbol]['dividend_info'].empty, f"Dividend info for {symbol} should not be empty"
-        assert not data[symbol]['financial_data'].empty, f"Financial data for {symbol} should not be empty"
+        assert not data[symbol].kline_data.empty, f"Kline data for {symbol} should not be empty"
+        assert not data[symbol].dividend_info.empty, f"Dividend info for {symbol} should not be empty"
+        assert not data[symbol].financial_data.empty, f"Financial data for {symbol} should not be empty"
 
     # 测试日期范围迭代器
     data_feed = BacktestDataFeed('2001-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols)
     for data in data_feed:
         pass
 
-    adjusted_kline_df = data['symbol_data']['000001.SZ']['forward_adjusted_kline_data']
+    adjusted_kline_df = data.symbols['000001.SZ'].forward_adjusted_kline_data
     adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_DAILY_FORWARD.csv'), index=False)
 
     # 测试30min数据读取
     data_feed = BacktestDataFeed('2025-01-01', datetime.now().strftime('%Y-%m-%d'), archive_path, symbols, kline_type=KLineType.MIN30)
     for data in data_feed:
-        if data['date'] == '2025-06-12 10:00:00':
+        if data.date == '2025-06-12 10:00:00':
             break
-    adjusted_kline_df = data['symbol_data']['000001.SZ']['forward_adjusted_kline_data']
+    adjusted_kline_df = data.symbols['000001.SZ'].forward_adjusted_kline_data
     adjusted_kline_df.to_csv(os.path.join('adjusted_historical_data_MIN30_FORWARD.csv'), index=False)
