@@ -258,6 +258,10 @@ class TargetPosition: # 目标持仓信号
 @dataclass
 class Fundamental:
     symbol: str
+
+    name: str
+    industry: str
+
     financial_data: pd.DataFrame # 对齐FinancialData结构
     dividend_info: pd.DataFrame # 对齐DividendInfo结构
     kline_data: pd.DataFrame # 对齐HistoricalData结构

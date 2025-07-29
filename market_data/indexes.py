@@ -18,5 +18,5 @@ INDEXES = [
 if __name__ == '__main__':
     symbols = []
     for index in INDEXES:
-        symbols.append(index.code + '.' + index.market)
+        symbols.append(index.to_string())
     print(','.join(symbols))

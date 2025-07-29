@@ -5,8 +5,10 @@ import os
 import re
 from datetime import datetime
 import logging
+from dataclasses import dataclass, field, fields
 
-from fdata.market_data.models import KLineType
+from fdata.market_data.models import KLineType, StockInfo, DividendInfo, FinancialData
+from fdata.market_data.indexes import INDEXES
 from .models import Fundamental, MarketSnapshot
 
 def parse_ts(time_str: str) -> int:
@@ -75,21 +77,76 @@ class BacktestDataFeed:
         self._symbols = symbols
         self._kline_type = kline_type
 
+        # 加载市场所有股票
+        self._stock_infos: Dict[str, StockInfo] = self._load_stock_list()
+        for symbol in self._symbols:
+            if symbol not in self._stock_infos:
+                raise ValueError(f"Symbol {symbol} not found in stock list")
+
+        # 加载预定义指数
+        self._indexes = self._load_indexes()
+
         date_set = set()
         self._symbol_data_map: Dict[str, Dict[str, BacktestDataFeed.IndexWrapper]] = {}
         for symbol in self._symbols:
             self._symbol_data_map[symbol] = self._load_symbol(symbol)
             date_set.update(self._symbol_data_map[symbol]['kline_data'].df['date'].unique())
+        for symbol in self._indexes:
+            self._symbol_data_map[symbol] = self._load_symbol(symbol, is_index=True)
+            date_set.update(self._symbol_data_map[symbol]['kline_data'].df['date'].unique())
+
         self._date_list = list(date_set)
         self._date_list.sort()
         self._date_list = [date for date in self._date_list if parse_ts(start_date) <= parse_ts(date) <= parse_ts(end_date)]
 
-    def _load_symbol(self, symbol: str) -> Dict[str, IndexWrapper]:
+    def _load_indexes(self) -> List[str]:
+        indexes = []
+        for index in INDEXES:
+            indexes.append(index.to_string())
+        return indexes
+
+    def _load_stock_list(self) -> Dict[str, StockInfo]:
+        stock_infos = {}
+        # 上证
+        df = pd.read_csv('archive/stock_list_上证指数.csv', dtype=str)
+        for index, row in df.iterrows():
+            symbol = row['symbol']
+            stock_infos[symbol] = StockInfo(
+                symbol=symbol,
+                name=row['name'],
+                industry=row['industry'],
+            )
+        # 北交
+        df = pd.read_csv('archive/stock_list_北交所.csv', dtype=str)
+        for index, row in df.iterrows():
+            symbol = row['symbol']
+            stock_infos[symbol] = StockInfo(
+                symbol=symbol,
+                name=row['name'],
+                industry=row['industry'],
+            )
+        # 深证
+        df = pd.read_csv('archive/stock_list_深证成指.csv', dtype=str)
+        for index, row in df.iterrows():
+            symbol = row['symbol']
+            stock_infos[symbol] = StockInfo(
+                symbol=symbol,
+                name=row['name'],
+                industry=row['industry'],
+            )
+
+        return stock_infos
+
+    def _load_symbol(self, symbol: str, is_index: bool = False) -> Dict[str, IndexWrapper]:
         # 1. 加载除权除息数据
-        dividend_info = pd.read_csv(os.path.join(self._archive_path, symbol, 'dividend_info.csv'), dtype=str)
-        dividend_info.dropna(subset=['ex_dividend_date'], inplace=True)  # 删除除权除息日期为空的行
+        dividend_info = pd.DataFrame(columns=[field.name for field in fields(DividendInfo)])
+        if not is_index:
+            dividend_info = pd.read_csv(os.path.join(self._archive_path, symbol, 'dividend_info.csv'), dtype=str)
+            dividend_info.dropna(subset=['ex_dividend_date'], inplace=True)  # 删除除权除息日期为空的行
         # 2. 加载财务数据
-        financial_data = pd.read_csv(os.path.join(self._archive_path, symbol, 'financial_data.csv'), dtype=str)
+        financial_data = pd.DataFrame(columns=[field.name for field in fields(FinancialData)])
+        if not is_index:
+            financial_data = pd.read_csv(os.path.join(self._archive_path, symbol, 'financial_data.csv'), dtype=str)
         # 3. 加载k线数据
         if self._kline_type == KLineType.DAILY:
             kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.DAILY.name}_NONE.csv'), dtype=str)
@@ -155,8 +212,13 @@ class BacktestDataFeed:
     def _get(self, date: str) -> Dict[str, Fundamental]:
         result = {}
         for symbol, data_map in self._symbol_data_map.items():
+            stock_info = StockInfo(symbol=symbol, name='', industry='')
+            if symbol in self._stock_infos:
+                stock_info = self._stock_infos[symbol]
             fundamental = Fundamental(
                 symbol=symbol,
+                name=stock_info.name,
+                industry=stock_info.industry,
                 financial_data=data_map['financial_data'].till(date),
                 dividend_info=data_map['dividend_info'].till(date),
                 kline_data=data_map['kline_data'].till(date),
