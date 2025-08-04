@@ -12,7 +12,7 @@ from fdata.dao.csv_dao import CSVGenericDAO
 from fdata.spider.spider_core import AntiDetectionSpider
 from fdata.spider.rate_limiter import RateLimiter, RateLimiterManager
 from fdata.market_data.market_data_fetcher import MarketDataFetcher
-from fdata.market_data.models import RealTimeQuote, KLineType, AdjustType, HistoricalData, Symbol, FinancialData, StockInfo, StockQuoteInfo, DividendInfo
+from fdata.market_data.models import RealTimeQuote, KLineType, AdjustType, HistoricalData, Symbol, FinancialData, StockInfo, StockQuoteInfo, DividendInfo, CapitalData
 from fdata.utils.rand_str import rand_str
 from fdata.utils.retry import async_retry
 
@@ -59,6 +59,11 @@ class MarketDataDumper:
     async def dump_dividend_info(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[DividendInfo]):
         for symbol in symbols:
             await self.fetcher.fetch_dividend_info(symbol, csv_dao)
+
+    # 股本数据
+    async def dump_capital_data(self, symbols: List[Symbol], csv_dao: CSVGenericDAO[CapitalData]):
+        for symbol in symbols:
+            await self.fetcher.fetch_capital_data(symbol, csv_dao, from_='eastmoney')
 
 
 def chunk_symbols(symbols: List[Symbol], batch_size: int) -> List[List[Symbol]]:
@@ -294,6 +299,22 @@ async def main(args):
                         os.makedirs(os.path.dirname(dst_file_path))
                     merge_data(dst_file_path, df, 'plan_notice_date', 'plan_notice_date').to_csv(dst_file_path, index=False, encoding='utf-8')
                     os.remove(tmp_file_name)
+            elif function == 'capital_data':
+                if not args.symbols:
+                    raise ValueError("Symbols must be provided for capital data")
+                for symbol in args.symbols:
+                    dst_file_path = os.path.join(args.archive_directory, symbol.to_string(), 'capital_data.csv')
+                    if os.path.exists(dst_file_path) and args.write_mode == 'skip_existing':
+                        logging.info(f"Skipping existing file: {dst_file_path}")
+                        continue
+                    tmp_file_name = f"tmp_{rand_str(16)}.csv"
+                    with CSVGenericDAO(tmp_file_name, CapitalData) as dao:
+                        await dumper.dump_capital_data([symbol], dao)
+                    df = pd.read_csv(tmp_file_name, encoding='utf-8', dtype=str)
+                    if not os.path.exists(os.path.dirname(dst_file_path)):
+                        os.makedirs(os.path.dirname(dst_file_path))
+                    merge_data(dst_file_path, df, 'end_date', 'end_date').to_csv(dst_file_path, index=False, encoding='utf-8')
+                    os.remove(tmp_file_name)
             else:
                 raise ValueError(f"Invalid function: {function}")
         
@@ -306,7 +327,7 @@ if __name__ == "__main__":
     today = datetime.now().strftime('%Y-%m-%d')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     parser = argparse.ArgumentParser(description="Market Data Dumper")
-    parser.add_argument('--functions', type=str, required=True, help="Comma-separated list of functions to execute (e.g., stock_list,realtime,historical,financial,stock_quote,dividend_info)")
+    parser.add_argument('--functions', type=str, required=True, help="Comma-separated list of functions to execute (e.g., stock_list,realtime,historical,financial,stock_quote,dividend_info,capital_data)")
     parser.add_argument('--archive_directory', type=str, default='archive', help="Directory to store archived data")
     parser.add_argument('--write_mode', type=str, default='skip_existing', choices=['skip_existing', 'default'], help="Write mode for CSV files. skip_existing will skip existing file, default will merge existing file and fetched data(for historical, financial, dividend) or overwrite(for stock_list, stock_quote).")
     parser.add_argument('--market_names', type=str, default='上证指数,深证成指,北交所,沪深300', help="Comma-separated list of market names (e.g., SH,SZ,BJ)")

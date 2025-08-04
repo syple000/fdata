@@ -1012,6 +1012,99 @@ class MarketDataFetcher:
         csv_dao.write_records(all_financial_data)
         return all_financial_data
 
+    async def fetch_capital_data(self, symbol: Symbol, csv_dao: CSVGenericDAO[CapitalData], from_: str = 'eastmoney') -> List[CapitalData]:
+        if from_ == 'eastmoney':
+            return await self._fetch_capital_data_em(symbol, csv_dao)
+        elif from_ == 'sina':
+            raise NotImplementedError("Sina capital data fetching is not implemented yet.")
+        else:
+            raise ValueError(f"Unsupported source: {from_}. Supported sources are 'eastmoney' and 'sina'.")
+
+    async def _fetch_capital_data_em(self, symbol: Symbol, csv_dao: CSVGenericDAO[CapitalData]) -> List[CapitalData]:
+        all_records = []
+        page = 1
+        page_size = 100
+
+        while True:
+            @async_retry(max_retries=5, delay=1, ignore_exceptions=False)
+            async def _fetch_capital_page():
+                params = {
+                    "reportName": "RPT_F10_EH_EQUITY",
+                    "columns": "SECUCODE,SECURITY_CODE,END_DATE,TOTAL_SHARES,LIMITED_SHARES,LIMITED_OTHARS,LIMITED_DOMESTIC_NATURAL,LIMITED_STATE_LEGAL,LIMITED_OVERSEAS_NOSTATE,LIMITED_OVERSEAS_NATURAL,UNLIMITED_SHARES,LISTED_A_SHARES,B_FREE_SHARE,H_FREE_SHARE,FREE_SHARES,LIMITED_A_SHARES,NON_FREE_SHARES,LIMITED_B_SHARES,OTHER_FREE_SHARES,LIMITED_STATE_SHARES,LIMITED_DOMESTIC_NOSTATE,LOCK_SHARES,LIMITED_FOREIGN_SHARES,LIMITED_H_SHARES,SPONSOR_SHARES,STATE_SPONSOR_SHARES,SPONSOR_SOCIAL_SHARES,RAISE_SHARES,RAISE_STATE_SHARES,RAISE_DOMESTIC_SHARES,RAISE_OVERSEAS_SHARES,CHANGE_REASON",
+                    "quoteColumns": "",
+                    "filter": f'(SECUCODE="{symbol.code}.{symbol.market}")',
+                    "pageNumber": str(page),
+                    "pageSize": str(page_size),
+                    "sortTypes": "-1",
+                    "sortColumns": "END_DATE",
+                    "source": "HSF10",
+                    "client": "PC"
+                }
+                url = f"https://datacenter.eastmoney.com/securities/api/data/v1/get?{urlencode(params)}"
+                async with self.rate_limiter_mgr.get_rate_limiter("datacenter.eastmoney.com"):
+                    response = await self.spider.crawl_url(url, headers=self.eastmoney_headers)
+                if not response or not response.success:
+                    raise Exception(f"Failed to fetch capital data: {response.error if response else 'No response'}")
+                payload = json.loads(extract_content(response.content, "html > body > pre"))
+                return payload.get('result', {}).get('data', [])
+            
+            data = await _fetch_capital_page()
+            if data:
+                all_records.extend(data)
+            if len(data) < page_size:
+                break
+            page += 1
+
+        if not all_records:
+            raise Exception(f"No capital data found for symbol: {symbol}")
+
+        capital_datas = []
+        def safe_int(val):
+            try:
+                return int(val) if val is not None else 0
+            except (ValueError, TypeError):
+                return 0
+        def safe_str(val):
+            return str(val) if val is not None else ""
+        for record in all_records: 
+            capital_data = CapitalData(
+                symbol=symbol,
+                end_date=safe_str(record.get("END_DATE")),
+                total_shares=safe_int(record.get("TOTAL_SHARES")),
+                limited_shares=safe_int(record.get("LIMITED_SHARES")),
+                limited_othars=safe_int(record.get("LIMITED_OTHARS")),
+                limited_domestic_natural=safe_int(record.get("LIMITED_DOMESTIC_NATURAL")),
+                limited_state_legal=safe_int(record.get("LIMITED_STATE_LEGAL")),
+                limited_overseas_nostate=safe_int(record.get("LIMITED_OVERSEAS_NOSTATE")),
+                limited_overseas_natural=safe_int(record.get("LIMITED_OVERSEAS_NATURAL")),
+                unlimited_shares=safe_int(record.get("UNLIMITED_SHARES")),
+                listed_a_shares=safe_int(record.get("LISTED_A_SHARES")),
+                b_free_share=safe_int(record.get("B_FREE_SHARE")),
+                h_free_share=safe_int(record.get("H_FREE_SHARE")),
+                free_shares=safe_int(record.get("FREE_SHARES")),
+                limited_a_shares=safe_int(record.get("LIMITED_A_SHARES")),
+                non_free_shares=safe_int(record.get("NON_FREE_SHARES")),
+                limited_b_shares=safe_int(record.get("LIMITED_B_SHARES")),
+                other_free_shares=safe_int(record.get("OTHER_FREE_SHARES")),
+                limited_state_shares=safe_int(record.get("LIMITED_STATE_SHARES")),
+                limited_domestic_nostate=safe_int(record.get("LIMITED_DOMESTIC_NOSTATE")),
+                lock_shares=safe_int(record.get("LOCK_SHARES")),
+                limited_foreign_shares=safe_int(record.get("LIMITED_FOREIGN_SHARES")),
+                limited_h_shares=safe_int(record.get("LIMITED_H_SHARES")),
+                sponsor_shares=safe_int(record.get("SPONSOR_SHARES")),
+                state_sponsor_shares=safe_int(record.get("STATE_SPONSOR_SHARES")),
+                sponsor_social_shares=safe_int(record.get("SPONSOR_SOCIAL_SHARES")),
+                raise_shares=safe_int(record.get("RAISE_SHARES")),
+                raise_state_shares=safe_int(record.get("RAISE_STATE_SHARES")),
+                raise_domestic_shares=safe_int(record.get("RAISE_DOMESTIC_SHARES")),
+                raise_overseas_shares=safe_int(record.get("RAISE_OVERSEAS_SHARES")),
+                change_reason=safe_str(record.get("CHANGE_REASON"))
+            )
+            capital_datas.append(capital_data)
+        logging.info(f"Fetched capital data for {symbol}, {len(capital_datas)} records")
+        csv_dao.write_records(capital_datas)
+        return capital_datas
+
     def to_dict(self, data_objects: List[Any]) -> List[Dict]:
         """将数据对象转换为字典格式，便于持久化存储"""
         return [asdict(obj) for obj in data_objects]

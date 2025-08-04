@@ -315,3 +315,37 @@ def get_exchange(code: str) -> str:
     else:
         raise ValueError(f"Unsupported stock code: {code}. Expected code starting with 0, 3, 6, 8 or 4 for SZ, SH or BJ markets respectively.")
 
+@dataclass
+class CapitalData:
+    """股本数据结构"""
+    symbol: Symbol                # 股票代码
+    end_date: str                     # 截止日期
+    total_shares: int                 # 总股本
+    limited_shares: int               # 限售股
+    limited_othars: int               # 其他限售股
+    limited_domestic_natural: int     # 限售国内自然人股
+    limited_state_legal: int          # 限售国家法人股
+    limited_overseas_nostate: int     # 限售境外非国家股
+    limited_overseas_natural: int     # 限售境外自然人股
+    unlimited_shares: int             # 无限售流通股
+    listed_a_shares: int              # 上市A股
+    b_free_share: int                 # B股流通股
+    h_free_share: int                 # H股流通股
+    free_shares: int                  # 流通股
+    limited_a_shares: int             # 限售A股
+    non_free_shares: int              # 非流通股
+    limited_b_shares: int             # 限售B股
+    other_free_shares: int            # 其他流通股
+    limited_state_shares: int         # 限售国家股
+    limited_domestic_nostate: int     # 限售国内非国家股
+    lock_shares: int                  # 锁定股
+    limited_foreign_shares: int       # 限售外资股
+    limited_h_shares: int             # 限售H股
+    sponsor_shares: int               # 发起人股
+    state_sponsor_shares: int         # 国家发起人股
+    sponsor_social_shares: int        # 社会发起人股
+    raise_shares: int                 # 募集法人股
+    raise_state_shares: int           # 募集国家股
+    raise_domestic_shares: int        # 募集国内股
+    raise_overseas_shares: int        # 募集境外股
+    change_reason: str                # 变动原因
