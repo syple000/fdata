@@ -266,6 +266,7 @@ class Fundamental:
     dividend_info: pd.DataFrame # 对齐DividendInfo结构
     kline_data: pd.DataFrame # 对齐HistoricalData结构
     forward_adjusted_kline_data: pd.DataFrame # 对齐HistoricalData结构
+    capital_data: pd.DataFrame # 股本数据
 
 @dataclass
 class MarketSnapshot:

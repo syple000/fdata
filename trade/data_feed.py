@@ -7,7 +7,7 @@ from datetime import datetime
 import logging
 from dataclasses import dataclass, field, fields
 
-from fdata.market_data.models import KLineType, StockInfo, DividendInfo, FinancialData
+from fdata.market_data.models import KLineType, StockInfo, DividendInfo, FinancialData,CapitalData
 from fdata.market_data.indexes import INDEXES
 from .models import Fundamental, MarketSnapshot
 
@@ -160,11 +160,16 @@ class BacktestDataFeed:
             kline_data = pd.read_csv(os.path.join(self._archive_path, symbol, f'historical_data_{KLineType.MIN60.name}_NONE.csv'), dtype=str)
         else:
             raise ValueError(f"Unsupported kline type: {self._kline_type}")
+        # 加载股本数据
+        capital_data = pd.DataFrame(columns=[field.name for field in fields(CapitalData)])
+        if not is_index:
+            capital_data = pd.read_csv(os.path.join(self._archive_path, symbol, 'capital_data.csv'), dtype=str)
 
         return {
             'dividend_info': self.IndexWrapper(dividend_info, 'ex_dividend_date', 0),
             'financial_data': self.IndexWrapper(financial_data, 'report_date', 24*3600),
-            'kline_data': self.IndexWrapper(kline_data, 'date', 0)
+            'kline_data': self.IndexWrapper(kline_data, 'date', 0),
+            'capital_data': self.IndexWrapper(capital_data, 'end_date', 0),
         }
 
     def __iter__(self):
@@ -222,6 +227,7 @@ class BacktestDataFeed:
                 financial_data=data_map['financial_data'].till(date),
                 dividend_info=data_map['dividend_info'].till(date),
                 kline_data=data_map['kline_data'].till(date),
+                capital_data=data_map['capital_data'].till(date),
                 forward_adjusted_kline_data=None,
             )
             result[symbol] = fundamental
