@@ -167,7 +167,7 @@ class BacktestDataFeed:
 
         return {
             'dividend_info': self.IndexWrapper(dividend_info, 'ex_dividend_date', 0),
-            'financial_data': self.IndexWrapper(financial_data, 'report_date', 24*3600),
+            'financial_data': self.IndexWrapper(financial_data, 'notice_date', 24*3600),
             'kline_data': self.IndexWrapper(kline_data, 'date', 0),
             'capital_data': self.IndexWrapper(capital_data, 'end_date', 0),
         }

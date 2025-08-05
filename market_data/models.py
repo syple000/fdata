@@ -133,6 +133,7 @@ class FinancialData:
     """财务数据结构，适用于银行、保险、证券、综合等不同行业"""
     symbol: Symbol
     report_date: str
+    notice_date: str
 
     # ========== 资产负债表 - 通用字段 ==========
     total_assets: float                  # 资产总计 - 通用
